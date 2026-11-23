@@ -1,20 +1,22 @@
-import { useMemo, useState } from 'react'
-import { Check, Copy, Download, LoaderCircle, ShieldCheck } from 'lucide-react'
+import { useMemo } from 'react'
+import { Files, FlaskConical, ListChecks, LoaderCircle, ShieldCheck } from 'lucide-react'
 import {
   defaultClassName,
   elementLabel,
-  generatePom,
-  generateTestData,
+  generatePackage,
   isPomEligible,
+  type FileRole,
   type ModuleFormat,
 } from '../../generators/playwright'
 import { useSettings } from '../../shared/hooks'
 import { findNoise } from '../../shared/relevance'
 import type { OutputLanguage, ScanResult } from '../../shared/types'
-import { errorMessage } from '../../shared/utils'
 import { updateSettings } from '../../storage'
 import type { LocatorState } from '../explorer/useLocators'
 import { DISCONNECTED_HELP, type ValidationState } from '../explorer/useValidation'
+import { FileExplorer, type EditedFiles } from './FileExplorer'
+import { TestDataEditor } from './TestDataEditor'
+import { useTestData } from './useTestData'
 import './pom.css'
 
 /** Generator options that live with the explorer (they survive switching views). */
@@ -26,13 +28,11 @@ export interface PomForm {
   includeMethods: boolean
   allowUnvalidated: boolean
   propertyNames: Record<string, string>
-  /** Which generated file the editor shows. */
-  file: FileKind
-  /** User edits per file, and the generated code they were based on. */
-  edited: Partial<Record<FileKind, { code: string; base: string }>>
+  section: 'files' | 'data' | 'elements'
+  file: FileRole
+  /** User edits per generated file, and the generated code they were based on. */
+  edited: EditedFiles
 }
-
-export type FileKind = 'pom' | 'data'
 
 export const initialPomForm: PomForm = {
   scope: 'eligible',
@@ -41,7 +41,8 @@ export const initialPomForm: PomForm = {
   includeMethods: true,
   allowUnvalidated: false,
   propertyNames: {},
-  file: 'pom',
+  section: 'files',
+  file: 'page',
   edited: {},
 }
 
@@ -56,9 +57,8 @@ interface Props {
 
 export function PomPanel({ scan, locators, validation, picked, form, onFormChange }: Props) {
   const { language } = useSettings()
+  const testData = useTestData(scan.url)
   const set = (patch: Partial<PomForm>) => onFormChange((f) => ({ ...f, ...patch }))
-  const [copied, setCopied] = useState(false)
-  const [actionError, setActionError] = useState<string | null>(null)
 
   const fallbackClass = useMemo(() => defaultClassName(scan.title, scan.url), [scan])
   // "All eligible" skips the same noise the explorer hides (hidden duplicates, wrappers, icons).
@@ -66,16 +66,21 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
     const noise = findNoise(scan.elements)
     return scan.elements.filter((e) => isPomEligible(e) && !noise.has(e.id)).map((e) => e.id)
   }, [scan])
-  const scopeIds = form.scope === 'selected' ? scan.elements.filter((e) => picked.has(e.id)).map((e) => e.id) : eligibleIds
+  const scopeIds = useMemo(
+    () => (form.scope === 'selected' ? scan.elements.filter((e) => picked.has(e.id)).map((e) => e.id) : eligibleIds),
+    [form.scope, scan, picked, eligibleIds],
+  )
 
-  const pom = useMemo(
+  // One package from the live validation results and the current test data.
+  const pkg = useMemo(
     () =>
-      locators.results
-        ? generatePom({
+      locators.results && testData.loaded
+        ? generatePackage({
             scan,
             elementIds: scopeIds,
             locators: locators.results,
             validationOf: validation.resultFor,
+            testData: testData.data,
             options: {
               language,
               moduleFormat: form.moduleFormat,
@@ -86,266 +91,240 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
             },
           })
         : null,
-    // scopeIds derives from scan, picked and form.scope, which are all dependencies.
-    [scan, locators.results, validation.resultFor, language, form, fallbackClass, picked, eligibleIds],
+    [scan, scopeIds, locators.results, validation.resultFor, testData.loaded, testData.data, language, form, fallbackClass],
   )
 
-  if (!pom) {
+  if (!pkg) {
     return (
       <div className="pom">
         <p className="muted loc-pending">
-          <LoaderCircle size={14} className="spin" /> Generating locators…
+          <LoaderCircle size={14} className="spin" /> Preparing locators and test data…
         </p>
       </div>
     )
   }
 
-  const testData = generateTestData(scan, pom, { language, moduleFormat: form.moduleFormat })
-  const files: Record<FileKind, { fileName: string; generated: string } | null> = {
-    pom: { fileName: pom.fileName, generated: pom.code },
-    data: testData && { fileName: testData.fileName, generated: testData.code },
-  }
-  const fileKind: FileKind = files[form.file] ? form.file : 'pom'
-  const active = files[fileKind]!
-  const edited = form.edited[fileKind]
-  const code = edited?.code ?? active.generated
-  const outdated = !!edited && edited.base !== active.generated
-  const setEdited = (value: { code: string; base: string } | undefined) => set({ edited: { ...form.edited, [fileKind]: value } })
+  const disconnected = validation.connection === 'lost' || validation.connection === 'rescanned'
   const validatedInScope = scopeIds.filter((id) => locators.results?.get(id)?.locators.some((l) => validation.resultFor(l))).length
-  const unvalidatedIncluded = pom.properties.filter((p) => !p.validated).length
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch (err) {
-      setActionError(`Copy failed: ${errorMessage(err)}`)
-    }
-  }
-
-  function download() {
-    // Local download from an extension page: no permission, no network.
-    const url = URL.createObjectURL(new Blob([code], { type: 'text/plain;charset=utf-8' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = active.fileName
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  }
+  const included = pkg.pom.properties.length
+  const unvalidatedIncluded = pkg.pom.properties.filter((p) => !p.validated).length
+  const cases = pkg.scenarios.reduce((n, r) => n + r.scenarios.length, 0)
+  const validateButton = validation.running ? (
+    <span className="muted loc-pending">
+      <LoaderCircle size={14} className="spin" /> Validating {validation.running.done}/{validation.running.total}
+    </span>
+  ) : (
+    <button
+      className={validatedInScope < scopeIds.length ? 'btn btn-primary' : 'btn'}
+      onClick={() => void validation.validateElements(scopeIds)}
+      disabled={scopeIds.length === 0 || disconnected}
+    >
+      <ShieldCheck size={14} /> {validatedInScope > 0 ? 'Revalidate' : 'Validate'} {scopeIds.length} elements
+    </button>
+  )
 
   return (
     <div className="pom">
-      <header className="pom-header">
-        <h2>Page Object</h2>
-        <p className="muted">
-          Generated from validated locators. Tick elements in the list to build a Page Object from a selection.
-        </p>
-      </header>
-
-      <div className="pom-options">
-        <Field label="Language">
-          <Segmented
-            value={language}
-            options={[
-              ['typescript', 'TypeScript'],
-              ['javascript', 'JavaScript'],
-            ]}
-            onChange={(v) => void updateSettings({ language: v as OutputLanguage })}
-          />
-        </Field>
+      <header className="pom-config">
+        <label className="pom-field pom-class">
+          <span>Class</span>
+          <input className="input" value={form.className} placeholder={fallbackClass} onChange={(e) => set({ className: e.target.value })} spellCheck={false} />
+        </label>
+        <Segmented
+          label="Language"
+          value={language}
+          options={[
+            ['typescript', 'TypeScript'],
+            ['javascript', 'JavaScript'],
+          ]}
+          onChange={(v) => void updateSettings({ language: v as OutputLanguage })}
+        />
         {language === 'javascript' && (
-          <Field label="Module">
-            <Segmented
-              value={form.moduleFormat}
-              options={[
-                ['commonjs', 'CommonJS'],
-                ['esm', 'ES module'],
-              ]}
-              onChange={(v) => set({ moduleFormat: v as ModuleFormat })}
-            />
-          </Field>
-        )}
-        <Field label="Class name">
-          <input
-            className="input"
-            value={form.className}
-            placeholder={fallbackClass}
-            onChange={(e) => set({ className: e.target.value })}
-            spellCheck={false}
-          />
-        </Field>
-        <Field label="Elements">
           <Segmented
-            value={form.scope}
+            label="Modules"
+            value={form.moduleFormat}
             options={[
-              ['eligible', `All eligible (${eligibleIds.length})`],
-              ['selected', `Selected (${picked.size})`],
+              ['commonjs', 'CommonJS'],
+              ['esm', 'ES modules'],
             ]}
-            onChange={(v) => set({ scope: v as PomForm['scope'] })}
+            onChange={(v) => set({ moduleFormat: v as ModuleFormat })}
           />
-        </Field>
+        )}
+        <Segmented
+          label="Elements"
+          value={form.scope}
+          options={[
+            ['eligible', `All eligible (${eligibleIds.length})`],
+            ['selected', `Selected (${picked.size})`],
+          ]}
+          onChange={(v) => set({ scope: v as PomForm['scope'] })}
+        />
         <label className="check">
           <input type="checkbox" checked={form.includeMethods} onChange={(e) => set({ includeMethods: e.target.checked })} />
-          Reusable methods
+          Form methods
         </label>
-        <label className="check" title="Use a never-validated candidate when no validated one exists. Marked in the code.">
+        <label className="check" title="Use never-validated candidates when no validated one exists. They are marked in the code.">
           <input type="checkbox" checked={form.allowUnvalidated} onChange={(e) => set({ allowUnvalidated: e.target.checked })} />
-          Include unvalidated locators
+          Include unvalidated
         </label>
-      </div>
+      </header>
 
       <div className="pom-status">
         <p>
-          <strong>{pom.properties.length}</strong> included
+          <strong>{included}</strong> locators
           {unvalidatedIncluded > 0 && <span className="text-warn"> ({unvalidatedIncluded} unvalidated)</span>} ·{' '}
-          <strong>{pom.excluded.length}</strong> excluded · {validatedInScope} of {scopeIds.length} elements validated
-          {pom.methods.length > 0 && ` · methods: ${pom.methods.join(', ')}`}
+          <strong>{pkg.pom.excluded.length}</strong> excluded · {validatedInScope}/{scopeIds.length} elements validated ·{' '}
+          {pkg.pom.forms.length} form{pkg.pom.forms.length === 1 ? '' : 's'} · {cases} test case{cases === 1 ? '' : 's'}
         </p>
-        {validation.connection === 'lost' || validation.connection === 'rescanned' ? null : validation.running ? (
-          <span className="muted loc-pending">
-            <LoaderCircle size={14} className="spin" /> Validating {validation.running.done}/{validation.running.total}
-          </span>
-        ) : (
-          <button
-            className={validatedInScope < scopeIds.length ? 'btn btn-primary' : 'btn'}
-            onClick={() => void validation.validateElements(scopeIds)}
-            disabled={scopeIds.length === 0}
-          >
-            <ShieldCheck size={14} /> {validatedInScope > 0 ? 'Revalidate' : 'Validate'} {scopeIds.length} elements
-          </button>
-        )}
+        {validateButton}
       </div>
-      {(validation.connection === 'lost' || validation.connection === 'rescanned') && (
-        <p className="loc-warning">
-          {DISCONNECTED_HELP[validation.connection]} Until then, you can turn on Include unvalidated locators.
-        </p>
+      {disconnected && (
+        <p className="pom-alert">{DISCONNECTED_HELP[validation.connection as 'lost' | 'rescanned']} Until then you can turn on Include unvalidated.</p>
       )}
-      {validation.error && validation.connection === 'connected' && <p className="error" role="alert">Validation failed: {validation.error}</p>}
-      {form.scope === 'selected' && picked.size === 0 && (
-        <p className="muted pom-hint">No elements selected. Tick elements in the list, or switch to All eligible.</p>
+      {validation.error && !disconnected && <p className="error" role="alert">Validation failed: {validation.error}</p>}
+      {pkg.warnings.length > 0 && !pkg.blocked && (
+        <ul className="pom-warnings">
+          {pkg.warnings.map((w) => (
+            <li key={w}>{w}</li>
+          ))}
+        </ul>
       )}
 
-      <div className="pom-editor">
-        <div className="pom-editor-bar">
-          <div className="file-tabs" role="tablist" aria-label="Generated files">
-            {(['pom', 'data'] as const).map((k) => {
-              const f = files[k]
-              return f ? (
-                <button key={k} type="button" role="tab" aria-selected={fileKind === k} className="file-tab" onClick={() => set({ file: k })}>
-                  {f.fileName}
-                  {form.edited[k] && <span className="badge">Edited</span>}
-                </button>
-              ) : null
-            })}
-            {!testData && <span className="muted file-none">No test data: nothing to fill in this Page Object</span>}
-          </div>
-          <span className="spacer" />
-          {edited && (
-            <button type="button" className="link-btn" onClick={() => setEdited(undefined)}>
-              Discard edits
-            </button>
-          )}
-          <button type="button" className="btn" onClick={copy}>
-            {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
-          </button>
-          <button type="button" className="btn" onClick={download}>
-            <Download size={14} /> Download
-          </button>
-        </div>
-        {outdated && (
-          <p className="pom-outdated">
-            Options or validation changed since you edited the code.{' '}
-            <button type="button" className="link-btn" onClick={() => setEdited(undefined)}>
-              Replace with regenerated code
-            </button>
-          </p>
-        )}
-        {actionError && <p className="error" role="alert">{actionError}</p>}
-        <textarea
-          className="pom-code"
-          value={code}
-          onChange={(e) => setEdited({ code: e.target.value, base: edited?.base ?? active.generated })}
-          onKeyDown={insertSpacesOnTab}
-          spellCheck={false}
-          wrap="off"
-          aria-label={`${active.fileName} (editable)`}
+      <nav className="pom-tabs" aria-label="Generator sections">
+        <SectionTab active={form.section === 'files'} onClick={() => set({ section: 'files' })} icon={<Files size={14} />} label="Files" count={pkg.files.length} />
+        <SectionTab active={form.section === 'data'} onClick={() => set({ section: 'data' })} icon={<FlaskConical size={14} />} label="Test data" count={cases} />
+        <SectionTab
+          active={form.section === 'elements'}
+          onClick={() => set({ section: 'elements' })}
+          icon={<ListChecks size={14} />}
+          label="Elements"
+          count={included}
+          extra={pkg.pom.excluded.length ? `${pkg.pom.excluded.length} excluded` : undefined}
         />
-      </div>
+      </nav>
 
-      {pom.properties.length > 0 && (
-        <details className="pom-list">
-          <summary>Included elements ({pom.properties.length}) and property names</summary>
-          <table>
-            <tbody>
-              {pom.properties.map((p) => {
-                const el = scan.elements.find((e) => e.id === p.elementId)!
-                return (
-                  <tr key={p.elementId}>
-                    <td>
-                      <input
-                        className="input input-mono"
-                        value={form.propertyNames[p.elementId] ?? p.name}
-                        onChange={(e) => set({ propertyNames: { ...form.propertyNames, [p.elementId]: e.target.value } })}
-                        aria-label={`Property name for ${elementLabel(el)}`}
-                        spellCheck={false}
-                      />
+      <div className="pom-body">
+        {form.section === 'files' &&
+          (pkg.blocked ? (
+            <div className="pom-empty">
+              <h3>Nothing to generate yet</h3>
+              <p>{pkg.blocked}</p>
+              <div className="pom-empty-actions">
+                {validateButton}
+                {!form.allowUnvalidated && (
+                  <button type="button" className="btn" onClick={() => set({ allowUnvalidated: true })}>
+                    Include unvalidated locators
+                  </button>
+                )}
+                {form.scope === 'selected' && (
+                  <button type="button" className="btn" onClick={() => set({ scope: 'eligible' })}>
+                    Use all eligible elements
+                  </button>
+                )}
+                <button type="button" className="btn" onClick={() => set({ section: 'elements' })}>
+                  See excluded elements
+                </button>
+              </div>
+            </div>
+          ) : (
+            <FileExplorer
+              pkg={pkg}
+              active={form.file}
+              onSelect={(file) => set({ file })}
+              edited={form.edited}
+              onEdit={(role, value) => onFormChange((f) => ({ ...f, edited: { ...f.edited, [role]: value } }))}
+            />
+          ))}
+
+        {form.section === 'data' && <TestDataEditor reports={pkg.scenarios} testData={testData} pageUrl={scan.url} baseName={pkg.baseName} />}
+
+        {form.section === 'elements' && (
+          <div className="pom-elements">
+            <table className="pom-table">
+              <thead>
+                <tr>
+                  <th>Property</th>
+                  <th>Element</th>
+                  <th>Locator</th>
+                  <th>Validation</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pkg.pom.properties.map((p) => {
+                  const el = scan.elements.find((e) => e.id === p.elementId)!
+                  return (
+                    <tr key={p.elementId}>
+                      <td>
+                        <input
+                          className="input input-mono"
+                          value={form.propertyNames[p.elementId] ?? p.name}
+                          onChange={(e) => set({ propertyNames: { ...form.propertyNames, [p.elementId]: e.target.value } })}
+                          aria-label={`Property name for ${elementLabel(el)}`}
+                          spellCheck={false}
+                        />
+                      </td>
+                      <td className="truncate">{elementLabel(el)}</td>
+                      <td>
+                        <code className="pom-expr">{p.locator.expression}</code>
+                      </td>
+                      <td>
+                        <span className="val-badge" data-tone={p.validated ? 'ok' : 'warn'}>
+                          {p.validated ? 'Validated' : 'Unvalidated'}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+                {pkg.pom.properties.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="muted">
+                      No element has a usable locator yet.
                     </td>
-                    <td className="truncate">{elementLabel(el)}</td>
-                    <td><code className="truncate">{p.locator.displayValue}</code></td>
-                    <td>{p.validated ? <span className="val-badge" data-tone="ok">Validated</span> : <span className="val-badge" data-tone="warn">Unvalidated</span>}</td>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </details>
-      )}
-
-      {pom.excluded.length > 0 && (
-        <details className="pom-list">
-          <summary>Excluded elements ({pom.excluded.length})</summary>
-          <ul>
-            {pom.excluded.map((x) => (
-              <li key={x.elementId}>
-                <span className="truncate">{x.label}</span>
-                <span className="muted">{x.reason}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+                )}
+              </tbody>
+            </table>
+            {pkg.pom.excluded.length > 0 && (
+              <>
+                <h3 className="pom-subhead">Excluded ({pkg.pom.excluded.length})</h3>
+                <ul className="pom-excluded">
+                  {pkg.pom.excluded.map((x) => (
+                    <li key={x.elementId}>
+                      <span className="truncate">{x.label}</span>
+                      <span className="muted">{x.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
-/** Tab inserts two spaces instead of leaving the editor. */
-function insertSpacesOnTab(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-  if (e.key !== 'Tab' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return
-  e.preventDefault()
-  const t = e.currentTarget
-  t.setRangeText('  ', t.selectionStart, t.selectionEnd, 'end')
-  t.dispatchEvent(new Event('input', { bubbles: true }))
+function SectionTab(props: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count: number; extra?: string }) {
+  return (
+    <button type="button" className="pom-tab" aria-pressed={props.active} onClick={props.onClick}>
+      {props.icon} {props.label} <span className="kind-count">{props.count}</span>
+      {props.extra && <span className="pom-tab-extra">{props.extra}</span>}
+    </button>
+  )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Segmented({ label, value, options, onChange }: { label: string; value: string; options: [string, string][]; onChange: (v: string) => void }) {
   return (
     <div className="pom-field">
-      <span className="pom-field-label">{label}</span>
-      {children}
-    </div>
-  )
-}
-
-function Segmented({ value, options, onChange }: { value: string; options: [string, string][]; onChange: (v: string) => void }) {
-  return (
-    <div className="segmented" role="radiogroup">
-      {options.map(([v, label]) => (
-        <label key={v}>
-          <input type="radio" checked={value === v} onChange={() => onChange(v)} />
-          {label}
-        </label>
-      ))}
+      <span>{label}</span>
+      <div className="segmented" role="radiogroup" aria-label={label}>
+        {options.map(([v, text]) => (
+          <label key={v}>
+            <input type="radio" checked={value === v} onChange={() => onChange(v)} />
+            {text}
+          </label>
+        ))}
+      </div>
     </div>
   )
 }

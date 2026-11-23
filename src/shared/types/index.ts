@@ -280,3 +280,25 @@ export interface LocatorValidationResult {
 }
 
 export type MessageResponse<T> = { ok: true; data: T } | { ok: false; error: string }
+
+// ---------------------------------------------------------------------------
+// Test data for generated Playwright tests. Entered by the user (or suggested
+// as placeholders); never read from the page.
+// ---------------------------------------------------------------------------
+
+export type ScenarioOutcome = 'success' | 'failure'
+
+export interface TestScenario {
+  id: string
+  name: string
+  /** Value per form parameter name (checkboxes: boolean). */
+  values: Record<string, string | boolean>
+  expected: ScenarioOutcome
+  /** Part of the URL expected after submitting (typically for success). */
+  expectedUrl?: string
+  /** Text expected on the page after submitting (the error message for failures). */
+  expectedText?: string
+}
+
+/** Scenarios per form (keyed by the form's method name), for one page. */
+export type PageTestData = Record<string, TestScenario[]>

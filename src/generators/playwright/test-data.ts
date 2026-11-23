@@ -1,19 +1,16 @@
-// Sample test data for a generated Page Object. Values are synthetic and
-// deterministic, chosen from each field's type, label and constraints. Nothing
-// typed on the page is ever read (the scanner never collects values).
+// Test data for generated Playwright tests: scenario suggestions, scenario
+// checks and the <Name>TestData file. Values are entered by the user or are
+// clearly marked placeholders / synthetic samples. Nothing is read from the page.
 import { TEST_ID_ATTRIBUTES } from '../../shared/constants'
-import type { ScannedElement, ScanResult } from '../../shared/types'
+import type { PageTestData, ScannedElement, TestScenario } from '../../shared/types'
 import { jsString } from '../../core/locator-engine/utils/escaping'
-import { camelCase, words } from './naming'
-import { fieldAction, type PomOptions, type PomResult } from './pom-generator'
+import type { FormParam, FormSpec } from './forms'
+import { camelCase, pascalCase, words } from './naming'
+import { comment, paramType, type ModuleFormat } from './pom-generator'
+import type { OutputLanguage } from '../../shared/types'
 
-export interface TestDataResult {
-  fileName: string
-  variableName: string
-  code: string
-  /** Sample value per Page Object property. */
-  values: Record<string, string | boolean>
-}
+/** Values starting with this are placeholders: tests using them are skipped until replaced. */
+export const PLACEHOLDER = 'YOUR_'
 
 /** [keywords, value]: first match wins, so specific keywords come first. */
 const BY_KEYWORD: [RegExp, string][] = [
@@ -45,142 +42,209 @@ const BY_KEYWORD: [RegExp, string][] = [
   [/\b(full ?name|your name|name)\b/, 'Alex Morgan'],
 ]
 
-const BY_INPUT_TYPE: Record<string, string> = {
+const BY_KIND: Partial<Record<FormParam['kind'], string>> = {
   email: 'test.user@example.com',
   password: 'Test@12345',
   tel: '+1 555 010 0199',
   url: 'https://example.com',
   search: 'playwright',
   date: '2030-01-15',
-  time: '09:30',
-  'datetime-local': '2030-01-15T09:30',
-  month: '2030-01',
-  week: '2030-W03',
-  color: '#3366ff',
+  textarea: 'This is a test message.',
 }
 
 /** Words describing a field: label, name, id, placeholder, autocomplete. */
-function describe(el: ScannedElement): string {
-  const a = el.attributes
+function describe(p: FormParam, elements: Map<string, ScannedElement>): string {
+  const el = elements.get(p.elementIds[0]!)
+  const a = el?.attributes ?? {}
   const testAttr = TEST_ID_ATTRIBUTES.find((t) => a[t])
-  return words(
-    [el.accessibleName, a.name, a.id, a.placeholder, a.autocomplete, testAttr ? a[testAttr] : '']
-      .filter(Boolean)
-      .join(' '),
-  )
+  return words([p.label, p.name, a.name, a.id, a.placeholder, a.autocomplete, testAttr ? a[testAttr] : ''].filter(Boolean).join(' '))
     .join(' ')
     .toLowerCase()
 }
 
-function numberValue(el: ScannedElement): string {
-  const min = Number(el.attributes.min)
-  const max = Number(el.attributes.max)
-  if (Number.isFinite(min)) return String(min)
-  if (Number.isFinite(max)) return String(Math.min(1, max))
-  return '1'
-}
-
 /** Applies minlength/maxlength so the sample passes the field's own constraints. */
-function fitLength(value: string, el: ScannedElement): string {
-  const max = Number(el.attributes.maxlength)
-  const min = Number(el.attributes.minlength)
+function fitLength(value: string, p: FormParam): string {
+  const { minLength: min, maxLength: max } = p.constraints
   let v = value
-  if (Number.isFinite(min) && min > 0 && v.length < min) v = v.padEnd(min, 'x')
-  if (Number.isFinite(max) && max > 0 && v.length > max) v = v.slice(0, max)
+  if (min && v.length < min) v = v.padEnd(min, 'x')
+  if (max && v.length > max) v = v.slice(0, max)
   return v
 }
 
-/** A select's first real option: its value attribute, or its text (selectOption accepts both). */
-function selectValue(el: ScannedElement, elements: ScannedElement[]): string {
-  const options = elements.filter((o) => o.tagName === 'option' && optionBelongsTo(o, el, elements))
-  const real = options.find((o) => {
-    const value = o.attributes.value ?? o.textContent ?? ''
-    return value.trim() && !o.properties.disabled && !/^(select|choose|--|please)/i.test((o.textContent ?? value).trim())
+/** First real option of a select (not a "Select…" placeholder). */
+function firstOption(p: FormParam): string {
+  const real = p.options.find((o) => o.value && !/^(select|choose|--|please)/i.test(o.label || o.value))
+  return real?.value ?? p.options[0]?.value ?? ''
+}
+
+/** A synthetic, valid-looking value for one parameter. */
+export function sampleValue(p: FormParam, elements: Map<string, ScannedElement>): string | boolean {
+  if (p.kind === 'checkbox') return true
+  if (p.kind === 'select' || p.kind === 'radio') return firstOption(p)
+  if (p.kind === 'number') return String(p.constraints.min ?? (p.constraints.max !== undefined ? Math.min(1, p.constraints.max) : 1))
+  const byKind = BY_KIND[p.kind]
+  if (byKind && p.kind !== 'textarea') return fitLength(byKind, p)
+  const match = BY_KEYWORD.find(([pattern]) => pattern.test(describe(p, elements)))
+  if (match) return fitLength(match[1], p)
+  return fitLength(byKind ?? `Test ${p.label.toLowerCase()}`, p)
+}
+
+const placeholderFor = (p: FormParam) => `${PLACEHOLDER}VALID_${words(p.name).join('_').toUpperCase()}`
+const isTextual = (p: FormParam) => p.type === 'string' && p.kind !== 'select' && p.kind !== 'radio'
+
+/**
+ * Suggested scenarios for a form: a valid case plus negative and boundary
+ * cases. Account-specific values are placeholders, never invented credentials.
+ */
+export function suggestScenarios(form: FormSpec, elements: ScannedElement[]): TestScenario[] {
+  const byId = new Map(elements.map((e) => [e.id, e]))
+  const sample = Object.fromEntries(form.params.map((p) => [p.name, sampleValue(p, byId)])) as Record<string, string | boolean>
+  let n = 0
+  const make = (name: string, values: Record<string, string | boolean>, expected: TestScenario['expected']): TestScenario => ({
+    id: `suggested-${form.method}-${++n}`,
+    name,
+    values,
+    expected,
   })
-  return real ? (real.attributes.value ?? real.textContent ?? '').trim() : ''
-}
 
-function optionBelongsTo(option: ScannedElement, select: ScannedElement, elements: ScannedElement[]): boolean {
-  if (option.parentId === select.id) return true
-  const group = elements.find((g) => g.id === option.parentId)
-  return group?.tagName === 'optgroup' && group.parentId === select.id
-}
+  if (form.kind === 'login') {
+    const password = form.params.find((p) => p.kind === 'password')!
+    const identity = form.params.find((p) => p !== password && isTextual(p))
+    const valid = { ...sample, [password.name]: placeholderFor(password), ...(identity ? { [identity.name]: placeholderFor(identity) } : {}) }
+    const badIdentity = identity?.kind === 'email' ? 'invalid.user@example.com' : 'invalid_user'
+    const out = [make('Valid credentials', valid, 'success')]
+    if (identity) {
+      const label = identity.label.toLowerCase()
+      out.push(
+        make('Invalid credentials', { ...valid, [identity.name]: badIdentity, [password.name]: 'invalid_password' }, 'failure'),
+        make(`Invalid ${label}`, { ...valid, [identity.name]: badIdentity }, 'failure'),
+        make('Invalid password', { ...valid, [password.name]: 'invalid_password' }, 'failure'),
+        make(`Empty ${label}`, { ...valid, [identity.name]: '', [password.name]: 'invalid_password' }, 'failure'),
+        make('Empty password', { ...valid, [identity.name]: badIdentity, [password.name]: '' }, 'failure'),
+      )
+    } else {
+      out.push(make('Invalid password', { ...valid, [password.name]: 'invalid_password' }, 'failure'), make('Empty password', { ...valid, [password.name]: '' }, 'failure'))
+    }
+    return out
+  }
 
-/** Synthetic sample value for one fillable element. */
-export function sampleValue(el: ScannedElement, elements: ScannedElement[]): string | boolean | undefined {
-  const action = fieldAction(el)
-  if (!action) return undefined
-  if (action === 'setChecked') return true
-  if (action === 'selectOption') return selectValue(el, elements)
-
-  const type = el.properties.inputType
-  if (type === 'number' || el.role === 'spinbutton') return numberValue(el)
-  const typed = type ? BY_INPUT_TYPE[type] : undefined
-  if (typed) return fitLength(typed, el)
-
-  const description = describe(el)
-  const match = BY_KEYWORD.find(([pattern]) => pattern.test(description))
-  if (match) return fitLength(match[1], el)
-  if (el.tagName === 'textarea') return fitLength('This is a test message.', el)
-  const label = words(el.accessibleName ?? el.attributes.name ?? '').slice(0, 3).join(' ').toLowerCase()
-  return fitLength(label ? `Test ${label}` : 'Test value', el)
+  const out = [make(form.kind === 'search' ? 'Search' : 'Valid submission', sample, 'success')]
+  if (form.kind === 'search') return out
+  for (const p of form.params) {
+    const label = p.label.toLowerCase()
+    if (p.required && isTextual(p)) out.push(make(`Empty ${label}`, { ...sample, [p.name]: '' }, 'failure'))
+    if (p.kind === 'email') out.push(make(`Invalid ${label} format`, { ...sample, [p.name]: 'not-an-email' }, 'failure'))
+    const { minLength, maxLength, min, max } = p.constraints
+    if (isTextual(p) && minLength && minLength > 1) out.push(make(`${p.label} shorter than ${minLength} characters`, { ...sample, [p.name]: 'x'.repeat(minLength - 1) }, 'failure'))
+    if (isTextual(p) && maxLength) out.push(make(`${p.label} longer than ${maxLength} characters`, { ...sample, [p.name]: 'x'.repeat(maxLength + 1) }, 'failure'))
+    if (p.kind === 'number' && min !== undefined) out.push(make(`${p.label} below ${min}`, { ...sample, [p.name]: String(min - 1) }, 'failure'))
+    if (p.kind === 'number' && max !== undefined) out.push(make(`${p.label} above ${max}`, { ...sample, [p.name]: String(max + 1) }, 'failure'))
+  }
+  return out
 }
 
 /**
- * Test data for the fillable properties of a generated Page Object: one entry
- * per field, plus the arguments for each generated method. Null when the Page
- * Object has nothing to fill.
+ * Why a scenario cannot run as a meaningful test yet. The generated spec
+ * applies the same rules at runtime (and skips with the reason).
  */
-export function generateTestData(scan: ScanResult, pom: PomResult, options: Pick<PomOptions, 'language' | 'moduleFormat'>): TestDataResult | null {
-  const byId = new Map(scan.elements.map((e) => [e.id, e]))
-  const values: Record<string, string | boolean> = {}
-  const byElement = new Map<string, string | boolean>()
-  for (const p of pom.properties) {
-    const value = sampleValue(byId.get(p.elementId)!, scan.elements)
-    if (value === undefined) continue
-    values[p.name] = value
-    byElement.set(p.elementId, value)
+export function scenarioIssues(s: TestScenario, form: FormSpec): string[] {
+  const issues: string[] = []
+  const all = { ...s.values, expectedUrl: s.expectedUrl ?? '', expectedText: s.expectedText ?? '' }
+  const placeholders = Object.entries(all).filter(([, v]) => typeof v === 'string' && v.startsWith(PLACEHOLDER)).map(([k]) => k)
+  if (placeholders.length) issues.push(`Replace the ${PLACEHOLDER}… placeholder in ${placeholders.join(', ')}`)
+  if (s.expected === 'success' && !s.expectedUrl && !s.expectedText) issues.push('Set an expected URL or expected text for this success case')
+  if (s.expected === 'failure' && !form.message && !s.expectedText) {
+    issues.push('Set the expected error text (no error message element was found on the page)')
   }
-  if (Object.keys(values).length === 0) return null
-
-  const ts = options.language === 'typescript'
-  const esm = ts || options.moduleFormat === 'esm'
-  const variableName = `${camelCase(words(pom.className))}Data`
-  const literal = (v: string | boolean) => (typeof v === 'boolean' ? String(v) : jsString(v))
-  const block = (name: string, entries: [string, string | boolean][]) => [
-    `  ${name}: {`,
-    ...entries.map(([k, v]) => `    ${k}: ${literal(v)},`),
-    '  },',
-  ]
-
-  const methods = pom.methodDetails.filter((m) => m.params.length > 0 && m.params.every((p) => p.elementId && byElement.has(p.elementId)))
-  const instance = camelCase(words(pom.className))
-  const example = methods[0]
-  const lines = [
-    `// Sample test data for ${pom.className}, generated by Locator Studio.`,
-    '// Synthetic values chosen from each field\'s type, label and constraints. Nothing was read from the page.',
-    '// Replace them with data that is valid for your application.',
-  ]
-  if (example) {
-    lines.push(
-      '//',
-      '// Usage:',
-      `//   const ${instance} = new ${pom.className}(page);`,
-      `//   await ${instance}.${example.name}(${example.params.map((p) => `${variableName}.${example.name}.${p.name}`).join(', ')});`,
-    )
+  for (const p of form.params) {
+    const v = s.values[p.name]
+    if (v === undefined) issues.push(`Missing value for ${p.name}`)
+    else if (p.kind === 'radio' && !p.options.some((o) => o.value === v)) issues.push(`${p.name} must be one of ${p.options.map((o) => o.value).join(', ')}`)
   }
-  lines.push('', `${esm ? 'export ' : ''}const ${variableName} = {`)
-  lines.push(...block('fields', Object.entries(values)))
-  for (const m of methods) {
-    lines.push(...block(m.name, m.params.map((p) => [p.name, byElement.get(p.elementId!)!] as [string, string | boolean])))
-  }
-  lines.push(ts ? '} as const;' : '};')
-  if (!esm) lines.push('', `module.exports = { ${variableName} };`)
+  if (!s.name.trim()) issues.push('Give the scenario a name')
+  return issues
+}
 
+export interface TestDataNames {
+  pageInfo: string
+  caseType: (form: FormSpec) => string
+  data: (form: FormSpec) => string
+}
+
+export function testDataNames(baseName: string): TestDataNames {
   return {
-    fileName: `${pom.className}.data.${ts ? 'ts' : 'js'}`,
-    variableName,
-    code: `${lines.join('\n')}\n`,
-    values,
+    pageInfo: `${camelCase(words(baseName))}PageInfo`,
+    caseType: (f) => `${pascalCase(words(f.method))}TestCase`,
+    data: (f) => `${f.method}TestData`,
   }
+}
+
+/** The <Name>TestData file: page details plus one typed array of cases per form. */
+export function renderTestData(o: {
+  baseName: string
+  className: string
+  specFile: string
+  dataFile: string
+  title: string
+  forms: FormSpec[]
+  scenarios: PageTestData
+  language: OutputLanguage
+  moduleFormat: ModuleFormat
+}): string {
+  const ts = o.language === 'typescript'
+  const esm = ts || o.moduleFormat === 'esm'
+  const names = testDataNames(o.baseName)
+  const exported: string[] = [names.pageInfo]
+  const lines: string[] = [
+    `// Test data for ${o.className}, used by ${o.specFile}.`,
+    `// Edit freely. Values starting with "${PLACEHOLDER}" are placeholders: the tests that use them are skipped until you replace them.`,
+    '// Written by Locator Studio from your scenarios. Nothing here was read from the page.',
+    '',
+    '/** Expected page details. */',
+    `${esm ? 'export ' : ''}const ${names.pageInfo} = {`,
+    `  title: ${jsString(o.title)},`,
+    '};',
+  ]
+  if (o.forms.length && ts) {
+    lines.push('', "export type ExpectedOutcome = 'success' | 'failure';")
+  }
+  for (const f of o.forms) {
+    const caseType = names.caseType(f)
+    const fields = [
+      { name: 'name', type: 'string', doc: 'Test title.' },
+      ...f.params.map((p) => ({ name: p.name, type: paramType(p), doc: `${p.label}${p.required ? ' (required)' : ''}` })),
+      { name: 'expected', type: ts ? 'ExpectedOutcome' : "'success' | 'failure'", doc: "'success': expectedUrl and/or expectedText must appear. 'failure': the error must appear." },
+      { name: 'expectedUrl', type: 'string', doc: 'Part of the URL after submitting.', optional: true },
+      { name: 'expectedText', type: 'string', doc: 'Text visible after submitting (for failures: the error message).', optional: true },
+    ] as { name: string; type: string; doc: string; optional?: boolean }[]
+    lines.push('')
+    if (ts) {
+      lines.push(`/** One run of ${o.className}.${f.method}(). */`, `export interface ${caseType} {`)
+      for (const fd of fields) lines.push(`  /** ${comment(fd.doc)} */`, `  ${fd.name}${fd.optional ? '?' : ''}: ${fd.type};`)
+      lines.push('}')
+    } else {
+      lines.push('/**', ` * One run of ${o.className}.${f.method}().`, ` * @typedef {object} ${caseType}`)
+      for (const fd of fields) lines.push(` * @property {${fd.type}} ${fd.optional ? `[${fd.name}]` : fd.name} ${comment(fd.doc)}`)
+      lines.push(' */')
+    }
+
+    lines.push('')
+    if (!ts) lines.push(`/** @type {${caseType}[]} */`)
+    lines.push(`${esm ? 'export ' : ''}const ${names.data(f)}${ts ? `: ${caseType}[]` : ''} = [`)
+    for (const s of o.scenarios[f.method] ?? []) {
+      lines.push('  {', `    name: ${jsString(s.name)},`)
+      for (const p of f.params) {
+        const v = s.values[p.name] ?? (p.type === 'boolean' ? false : '')
+        lines.push(`    ${p.name}: ${typeof v === 'boolean' ? String(v) : jsString(v)},`)
+      }
+      lines.push(`    expected: ${jsString(s.expected)},`)
+      if (s.expectedUrl) lines.push(`    expectedUrl: ${jsString(s.expectedUrl)},`)
+      if (s.expectedText) lines.push(`    expectedText: ${jsString(s.expectedText)},`)
+      lines.push('  },')
+    }
+    lines.push('];')
+    exported.push(names.data(f))
+  }
+  if (!esm) lines.push('', `module.exports = { ${exported.join(', ')} };`)
+  return `${lines.join('\n')}\n`
 }

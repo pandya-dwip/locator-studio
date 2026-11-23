@@ -1,5 +1,6 @@
 // Identifier naming for generated Page Objects: property, parameter and class names.
 import { elementKind } from '../../shared/element-kind'
+import { isMessage } from '../../shared/relevance'
 import { TEST_ID_ATTRIBUTES } from '../../shared/constants'
 import type { ScannedElement } from '../../shared/types'
 
@@ -72,8 +73,19 @@ function sourceWords(el: ScannedElement): string[] {
   return []
 }
 
+/** Status/error messages are named after their id or class ("error" → errorMessage), not their text. */
+function messageName(el: ScannedElement): string {
+  const fromAttr = [el.attributes.id, el.attributes.class?.split(/\s+/)[0]]
+    .map((v) => words(v ?? '').slice(0, 3))
+    .find((ws) => ws.some((w) => /\p{L}{2,}/u.test(w)))
+  const ws = fromAttr ?? [el.role === 'alert' ? 'alert' : 'status']
+  const last = ws[ws.length - 1]!.toLowerCase()
+  return toIdentifier(camelCase(['message', 'msg', 'toast', 'notice', 'alert', 'banner'].includes(last) && ws.length > 1 ? ws : [...ws, 'message']), 'statusMessage')
+}
+
 /** Base property name for an element: "Email address" input → "emailAddressInput". */
 export function basePropertyName(el: ScannedElement): string {
+  if (isMessage(el)) return messageName(el)
   const { suffix, synonyms } = suffixFor(el)
   let ws = sourceWords(el)
   const last = ws[ws.length - 1]?.toLowerCase()

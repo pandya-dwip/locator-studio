@@ -68,7 +68,7 @@ async function execute(code: string, className: string, language: 'typescript' |
     js = js.replace(/^import .*$/gm, '').replace(/^export /gm, '')
   }
   const module = { exports: {} as Record<string, unknown> }
-  const Cls = new Function('module', `${js}\nreturn typeof ${className} === 'function' ? ${className} : module.exports.${className};`)(module) as new (page: unknown) => Record<string, unknown>
+  const Cls = new Function('module', 'require', `${js}\nreturn typeof ${className} === 'function' ? ${className} : module.exports.${className};`)(module, () => ({ expect: () => ({}) })) as new (page: unknown) => Record<string, unknown>
   const calls: string[] = []
   const locator = (desc: string) => new Proxy({}, { get: (_t, action: string) => async (...args: unknown[]) => calls.push(`${desc}.${action}(${args.map((a) => JSON.stringify(a)).join(', ')})`) })
   const page = new Proxy({}, { get: (_t, method: string) => (...args: unknown[]) => {
@@ -86,7 +86,7 @@ describe('output languages', () => {
     const ctx = prepare()
     const r = pom(ctx, ctx.allEligible)
     expect(r.fileName).toBe('LoginPage.ts')
-    expect(r.code).toContain("import type { Locator, Page } from '@playwright/test';")
+    expect(r.code).toContain("import { expect, type Locator, type Page } from '@playwright/test';")
     expect(r.code).toContain('export class LoginPage {')
     expect(r.code).toContain('  readonly page: Page;')
     expect(r.code).toContain('  readonly emailInput: Locator;')
@@ -206,7 +206,7 @@ describe('locator selection', () => {
     expect(allowed.properties.length).toBe(ctx.allEligible.length)
     expect(allowed.properties.every((p) => !p.validated)).toBe(true)
     expect(allowed.code).toContain('// Unvalidated locator: confirm it before relying on it.')
-    expect(allowed.code).toContain('// 0 of 11 locators validated')
+    expect(allowed.code).toContain('0 of 11 locators validated')
     await execute(allowed.code, 'LoginPage', 'typescript')
   })
 
@@ -226,7 +226,7 @@ describe('methods', () => {
   it('generates goto() without query or fragment, and login() from the form fields and its submit button', async () => {
     const ctx = prepare()
     const r = pom(ctx, ctx.allEligible)
-    expect(r.methods).toEqual(['goto', 'login'])
+    expect(r.methods).toEqual(['goto', 'login', 'expectLoaded'])
     expect(r.code).toContain('  async login(email: string, password: string, rememberMe: boolean): Promise<void> {')
     const { calls, instance } = await execute(r.code, 'LoginPage', 'typescript')
     calls.length = 0
@@ -250,10 +250,11 @@ describe('methods', () => {
 
   it('no methods when disabled, and no form method without a single submit button', () => {
     const ctx = prepare()
-    expect(pom(ctx, ctx.allEligible, { includeMethods: false }).methods).toEqual([])
+    // goto() and expectLoaded() are always there (the spec uses them); the option controls form methods.
+    expect(pom(ctx, ctx.allEligible, { includeMethods: false }).methods).toEqual(['goto', 'expectLoaded'])
     // Without the submit button the form workflow is not supported by the selection.
     const noSubmit = ctx.allEligible.filter((id) => ctx.scan.elements.find((e) => e.id === id)!.accessibleName !== 'Log in')
-    expect(pom(ctx, noSubmit).methods).toEqual(['goto'])
+    expect(pom(ctx, noSubmit).methods).toEqual(['goto', 'expectLoaded'])
   })
 
   it('login() for fields outside a <form> when one clearly named action button exists', async () => {
@@ -274,7 +275,7 @@ describe('methods', () => {
 
     // Two candidate actions: ambiguous, so no method is guessed.
     const two = prepare(`${formless}<button>Continue</button>`)
-    expect(pom(two, two.scan.elements.filter(isPomEligible).map((e) => e.id)).methods).toEqual(['goto'])
+    expect(pom(two, two.scan.elements.filter(isPomEligible).map((e) => e.id)).methods).toEqual(['goto', 'expectLoaded'])
   })
 
   it('search() for a single search field form', () => {

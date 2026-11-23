@@ -78,7 +78,7 @@ Runs `tsc --noEmit` (strict), the unit tests, the production build, then the bui
 5. Pin Locator Studio from the puzzle-piece menu in the toolbar.
 6. Open any `http(s)` page, click the Locator Studio icon and press **Scan page**.
 7. Click **Open workspace**. In **Elements**, select an element to see its validated **Locators**, or press **Highlight on page**.
-8. Open **POM Generator**, press **Validate**, then copy or download the Page Object.
+8. Open **POM Generator**, press **Validate**, configure **Test data**, then copy or download the files (or the whole folder as a ZIP).
 
 After a production rebuild, click the reload icon on the extension's card in `chrome://extensions`.
 
@@ -390,94 +390,97 @@ Approximate results carry a warning to confirm them in a Playwright run. They ar
 - Each candidate shows its status badge, match count, visibility, enabled state, whether it is the scanned element, the time of the check, and any warnings.
 - After validation, **★ Best validated** marks the candidate the Page Object will use. Before validation, the engine's preliminary **★ Recommended** is shown instead.
 
-## POM Generator (M5)
+## POM Generator
 
-`src/generators/playwright/` turns scanned elements, their candidates and their validation results into Playwright Page Object source code. It is pure TypeScript with no DOM and no React.
+`src/generators/playwright/` turns scanned elements, their validated locators and your test data into a complete, standalone Playwright package. It is pure TypeScript with no DOM and no React; the UI only displays its output.
 
 | File | Responsibility |
 | --- | --- |
-| `pom-generator.ts` | Selects elements, renders TypeScript or JavaScript, and builds methods |
-| `select.ts` | Locator selection rules |
-| `naming.ts` | Property, parameter and class names |
+| `package.ts` | Builds the three files together from one set of forms and locators. Refuses to produce an empty package. |
+| `pom-generator.ts` | The page class |
+| `forms.ts` | Detects forms: fields (text, email, password, select, checkbox, radio group, textarea…), submit button and status/error message |
+| `test-data.ts` | Suggested scenarios, scenario checks, and the test data file |
+| `spec.ts` | The executable Playwright tests |
+| `select.ts` | Which locator each element gets |
+| `naming.ts` | Class, property and parameter names |
+| `zip.ts` | Dependency-free ZIP writer for the folder download |
 
-### Locator selection
+### The generated package
 
-1. Use the **first candidate validated as `valid`** (unique, and the scanned element), in the engine's order: recommendation, then stability, then strategy preference. A validated candidate always wins over an unvalidated one.
-2. Never use candidates validated as `multiple`, `mismatch`, `not-found`, `invalid` or `stale`.
-3. If no candidate is valid, the element is **excluded**, with a reason ("Not validated yet", "Every checked candidate matches more than one element", "The scanned element is no longer on the page", …).
-4. With **Include unvalidated locators** on, an excluded element may use a candidate that was never validated (or whose check was unsupported or failed). The code marks it with `// Unvalidated locator: confirm it before relying on it.`
-5. Unstable but valid locators are used, with a `// Unstable: …` comment.
+For a page whose class is `TestLoginPage`, the package is:
 
-The file header states how many locators were validated.
+```text
+TestLogin/
+├── TestLoginPage.ts       page class
+├── TestLoginTestData.ts   test data
+└── TestLogin.spec.ts      tests
+```
 
-### Output
+- **`TestLoginPage.ts`:**
+  - `static url` (the scanned URL without query or fragment) and `goto()`;
+  - one `readonly` `Locator` per included element (validated locators, preferring role, label and placeholder);
+  - a form method per detected form, such as `login(username, password)`, `search(query)` or `submitContactForm(...)`;
+  - `expectLoaded()`, which checks only elements that were visible when scanned;
+  - status/error messages exposed as locators (`errorMessage`), even when the element was empty and hidden at scan time.
+- **`TestLoginTestData.ts`:**
+  - `testLoginPageInfo` (the expected title);
+  - per form, an interface (`LoginTestCase`) and an array (`loginTestData`) with one entry per test case: field values, `expected: 'success' | 'failure'`, and optional `expectedUrl` / `expectedText`.
+- **`TestLogin.spec.ts`:**
+  - imports `test`/`expect` from `@playwright/test`, the page class (`./TestLoginPage`) and the data (`./TestLoginTestData`);
+  - a page-load test (title plus `expectLoaded()`);
+  - one parameterised test per case. Each opens the page, calls the form method with the case's values, then:
+    - **success:** asserts the expected URL and/or text, and that the error message is hidden;
+    - **failure:** asserts the error message is visible and contains the expected text.
+  - Cases that still contain `YOUR_…` placeholders, or a success case without an expectation, are **skipped with the reason** (`test.skip`). They are never passed without asserting anything.
 
-- **TypeScript:** `import type { Locator, Page } from '@playwright/test'`, `export class`, `readonly` typed fields, and typed method parameters. Saved as `.ts`.
-- **JavaScript:** CommonJS (`module.exports = { … }`, the default) or ES module (`export class`). Parameter types are given in JSDoc. Saved as `.js`.
-- **Elements:** **All eligible** (buttons, links, form fields and headings; not options, paragraphs or images) or **Selected** (ticked in the list, in any tab). Properties follow document order.
-- **Reusable methods** (optional), generated only when the scanned structure supports them:
-  - `goto()`: the scanned http(s) URL, without query string or fragment;
-  - one method per `<form>` with fillable fields and exactly one submit button. It is named `login()` when the form has a password field, `search(query)` for a single search field, and otherwise `submit…Form()`. It fills text fields, `selectOption`s selects, `setChecked`s checkboxes, then clicks submit.
-- **Naming:**
-  - **Source:** the accessible name first, then placeholder, id, `name`, test id and text, plus a type suffix, so you get `emailInput`, `logInButton`, `rememberMeCheckbox`, and `companyLogo` (the suffix isn't doubled).
-  - **Cleanup:** accents are folded to ASCII.
-  - **Validity:** reserved words get a suffix (`classElement`), and duplicates become `saveButton`, `saveButton2`.
-  - **Editing:** property names can be changed in **Included elements**.
-- **Class name:** the default comes from the page title (or the URL path), always PascalCase ending in `Page`. Any input is turned into a valid name.
-- **Methods without a `<form>`:** many sites put fields in a `<div>`. Fields outside any form get a method too, but only when exactly one clearly named action button exists ("Submit", "Log in", "Sign up", "Continue", "Search", …). Buttons like "open menu" never count, and two candidates mean no method is guessed.
+JavaScript output follows the same structure (`.js`, CommonJS `require` or ES modules with `.js` import extensions, JSDoc types). TypeScript imports have no extension, as Playwright's TypeScript loader expects.
+
+### Locator selection (validation controls generation)
+
+1. Each element uses the **first candidate validated as `valid`** (unique on the live page and the scanned element), in the engine's order: stable semantic locators first. Validation can overrule the preliminary recommendation. For example, `getByRole('link', { name: 'Practice' })` also matches "Practice Test Automation", so `a[href="/practice/"]` is used instead.
+2. Candidates validated as `multiple`, `mismatch`, `not-found`, `invalid` or `stale` are never used.
+3. Elements without a valid candidate are excluded, with the reason shown under **Elements**.
+4. **Include unvalidated** allows never-validated candidates. They are marked `// Unvalidated locator` in the page class and counted in the header.
+5. If nothing qualifies, **no files are generated**. The panel says exactly why (for example "9 × Not validated yet") and offers **Validate**, **Include unvalidated** and **See excluded elements**.
+
+Validation results are tied to the current scan and to each locator's exact expression, so a new scan never reuses old results.
 
 ### Test data
 
-Next to the Page Object, the generator writes `<ClassName>.data.ts` (or `.js`). It contains:
-- sample values for every fillable property (`fields`);
-- the arguments for each generated method (for example `login: { username, password }`);
-- a usage comment.
+**Test data** in the generator lists every detected form, its fields (name, label, kind, required, length limits) and an editable table of cases. You can:
+- edit the case name, each value (text input, dropdown for selects and radio groups, checkbox for booleans), the expected outcome, the expected URL and the expected text;
+- add, duplicate or remove cases, or reset to suggestions;
+- import or export JSON (`{ "version": 1, "page": "...", "forms": { "login": [ ... ] } }`). Imports keep only known fields, with the right types.
 
-It is generated by `src/generators/playwright/test-data.ts`.
+Suggestions are generated for forms you haven't edited:
+- **Login forms:** Valid credentials (`YOUR_VALID_…` placeholders, never invented accounts), Invalid credentials, Invalid username, Invalid password, Empty username, Empty password.
+- **Other forms:** a valid submission with synthetic values chosen from field types and labels, plus empty-required, invalid-email and boundary cases (minlength/maxlength/min/max).
 
-- **Synthetic and deterministic:** values come from the field's input type, then keywords in its label, name, id, placeholder and autocomplete. Examples: email → `test.user@example.com`, password → `Test@12345`, phone → `+1 555 010 0199`, date → `2030-01-15`, "company name" → `Example Ltd`, search → `playwright`. **Nothing typed on the page is ever read.**
-- **Constraints respected:** `minlength` pads, `maxlength` truncates, and number fields start at `min`. Selects use their first real option, not a "Select…" placeholder. Checkboxes are `true`.
-- **Format:** TypeScript uses `export const … as const`. JavaScript follows the module setting (CommonJS or ES module).
-- **In the editor:** switch between the two files above the code area. Copy, Download and edits work per file.
+Each case shows why it would be skipped, using the same rules as the generated spec. Cases are stored per page (origin + path) in `chrome.storage.local`, only in this browser. Field values are never read from the page.
 
-These are placeholders for structure and constraints. Replace them with data your application accepts.
+Every change regenerates the data file and the spec immediately.
 
-### Workspace
+### Files, copy and download
 
-**POM Generator** in the sidebar opens the generator in the explorer's main panel. The element list, tabs and selection stay on the left. The panel has:
-- language, module format, class name, scope, methods and unvalidated-locator options;
-- an included/excluded summary with a **Validate** button for the elements in scope;
-- a full-width, full-height **editable** code area (monospace, horizontal and vertical scrolling, Tab inserts two spaces);
-- **Copy**, and **Download** as `<ClassName>.ts` or `.js`. The download is a local file created from the code area's current contents, with no permission or network request needed.
+**Files** shows the generated folder. Select a file to see its complete source in a full-width editor (monospace, scrolls in both directions). Each file has **Copy** and **Download**, and **Download `<Name>.zip`** downloads the whole folder.
 
-If options or validation change after you edit the code, your edits are kept and a banner offers **Replace with regenerated code**. Switching language regenerates the code and keeps the other options.
+Edits are kept per file. If the generated version changes afterwards, a banner offers the regenerated file. Downloads and the ZIP always contain exactly what the preview shows. There is no syntax highlighting, to avoid adding an editor dependency.
 
-### Tests
+### Verification
 
-- `tests/unit/validator.test.ts` (jsdom) covers:
-  - unique, duplicate, missing and invalid CSS; XPath;
-  - role, label, placeholder, title, test-id and text locators;
-  - hidden and disabled matches;
-  - wrong-element and descendant matches;
-  - removed and replaced elements, and DOM changes after the scan;
-  - unknown snapshots, shadow DOM, batch isolation, and every engine candidate on a realistic page;
-  - that approximate strategies are never reported as exact.
-- `tests/unit/pom-generator.test.ts` runs the real scanner, engine and validator, then **executes** the generated code against a recording fake `page`. TypeScript is stripped and syntax-checked with Vite's oxc transform. It covers:
-  - TypeScript, CommonJS and ESM output;
-  - selected and all-eligible scope, and empty selection;
-  - duplicate names, reserved words and class-name cleanup;
-  - choosing a validated alternative over a recommended locator that validation shows to match several elements;
-  - exclusion and the unvalidated opt-in;
-  - never using stale, mismatch or multiple results;
-  - methods on and off, and `login`/`search`/`goto` behaviour.
+- `tests/unit/pom-package.test.ts`:
+  - **Compile:** writes the generated package to disk and compiles it with the project's `tsc` (strict, no unused names) against Playwright's type surface.
+  - **Execute:** runs all three files together with a recording fake of `@playwright/test`. This covers placeholder skips, edited data reaching the spec, assertions on the message locator, validation results changing locators, blocked packages, CommonJS/ESM imports, and ZIP structure and CRC-32.
+- `tests/unit/pom-generator.test.ts`: the page class, naming, selection rules and form methods (including forms without a `<form>` element).
+- **Real Playwright run (development check):** a local copy of the practice login page was scanned and validated with the built content script in Chrome, and the generated folder was run unchanged with `@playwright/test` 1.65 and Chrome. Strict `tsc` with the real Playwright types gave 0 errors. The run gave 6 passed (page load, valid login, invalid username, invalid password, empty username, empty password) and 1 skipped (placeholder). Changing one expected text made exactly that test fail.
 
-### Known limitations (M4/M5)
+### Known limitations
 
-- Role, label and text validation are approximations, so confirm critical locators in a Playwright run. The validator never uses Playwright itself.
-- Elements in closed shadow roots or iframes can't be validated, because they were never scanned.
-- Validation needs the scanned tab still open and unchanged. After a reload, scan again.
-- Methods are limited to `goto()` and form submission. There are no assertions or custom workflows.
-- The code area has no syntax highlighting (no editor dependency was added).
+- Role, label and text validation are approximations. Confirm critical locators in a Playwright run (the generated spec does this).
+- Success can only be asserted with an expected URL or text you provide. The generator doesn't guess what success looks like.
+- Form detection needs fillable fields and exactly one submit button per form (or one clearly named action button for fields outside a `<form>`). Multi-step flows are not generated.
+- Closed shadow roots and iframes are not scanned, so their elements are not in the package.
+- Test data is stored unencrypted in this browser profile's extension storage. Don't keep real production passwords there.
 
 ## Project structure
 
@@ -496,7 +499,7 @@ locator-studio/
 │   │   └── validator/       Locator Validator: live-DOM matching and verification
 │   ├── features/            Workspace pages: explorer (Elements, Locators, validation), pom-generator (panel),
 │   │                        settings, export
-│   ├── generators/playwright/  POM Generator: selection, naming, TS/JS rendering
+│   ├── generators/playwright/  POM Generator: page class, test data, spec, package, ZIP
 │   ├── shared/
 │   │   ├── types/           Message, scan and settings types
 │   │   ├── constants/       Storage keys and defaults

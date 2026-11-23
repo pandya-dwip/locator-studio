@@ -115,6 +115,10 @@ export function classify(el: Element): Classification | null {
   // Custom elements without semantics are grouped as custom, never assumed interactive.
   if (categories.length === 0 && isCustom) add('custom')
 
+  // Status/error slots are often empty until something happens (<div id="error"></div>),
+  // but tests assert on them, so they are extracted even without text.
+  if (categories.length === 0 && el.childElementCount <= 2 && isMessageSlot(el)) add('text')
+
   if (categories.length === 0) {
     // Generic elements that carry a test id or an author-provided label.
     if (hints.includes('test-id') || el.hasAttribute('aria-label') || el.hasAttribute('title')) {
@@ -137,6 +141,14 @@ export function classify(el: Element): Classification | null {
     role: role ?? implicit,
     roleSource: role ? 'explicit' : implicit ? 'implicit' : undefined,
   }
+}
+
+const MESSAGE_SLOT = /(^|[\s_-])(error|errors|alert|message|messages|notice|notification|toast|success|warning|invalid|feedback|flash)([\s_-]|$)/i
+
+function isMessageSlot(el: Element): boolean {
+  const live = el.getAttribute('aria-live')
+  if (live && live !== 'off') return true
+  return MESSAGE_SLOT.test(`${el.id} ${el.getAttribute('class') ?? ''}`)
 }
 
 /** A childless element with its own meaningful text that no extracted ancestor already covers. */

@@ -4,6 +4,11 @@ import { KINDS, VISIBILITY_LABEL, elementKind, identifier } from './format'
 
 const KIND_LABEL = Object.fromEntries(KINDS.map((k) => [k.id, k.label]))
 
+/** 'ok': a validated, usable locator exists. 'bad': checked, but no candidate qualifies. */
+export type RowValidation = 'ok' | 'bad'
+
+const ROW_VALIDATION_LABEL: Record<RowValidation, string> = { ok: 'Validated locator', bad: 'No candidate validated as unique and correct' }
+
 interface Props {
   elements: ScannedElement[]
   selectedId: string | null
@@ -13,10 +18,11 @@ interface Props {
   onTogglePicked: (id: string) => void
   /** Show the element type on each row (only useful on the All tab). */
   showKind: boolean
+  rowValidation: Map<string, RowValidation>
 }
 
 /** Compact, flat list in document order. Filtering by type happens in the tabs above it. */
-export function ElementList({ elements, selectedId, onSelect, picked, onTogglePicked, showKind }: Props) {
+export function ElementList({ elements, selectedId, onSelect, picked, onTogglePicked, showKind, rowValidation }: Props) {
   if (elements.length === 0) return <p className="muted list-none">No elements match.</p>
   return (
     <div className="el-list" role="group" aria-label="Extracted elements">
@@ -29,6 +35,7 @@ export function ElementList({ elements, selectedId, onSelect, picked, onTogglePi
           onSelect={onSelect}
           onTogglePicked={onTogglePicked}
           showKind={showKind}
+          validation={rowValidation.get(el.id)}
         />
       ))}
     </div>
@@ -43,6 +50,7 @@ const Row = memo(function Row({
   onSelect,
   onTogglePicked,
   showKind,
+  validation,
 }: {
   el: ScannedElement
   selected: boolean
@@ -50,6 +58,7 @@ const Row = memo(function Row({
   onSelect: (id: string) => void
   onTogglePicked: (id: string) => void
   showKind: boolean
+  validation: RowValidation | undefined
 }) {
   const label = el.accessibleName ?? el.textContent ?? identifier(el)
   const hidden = el.visibility === 'hidden' || el.visibility === 'not-rendered'
@@ -68,6 +77,7 @@ const Row = memo(function Row({
         onClick={() => onSelect(el.id)}
         title={hidden ? VISIBILITY_LABEL[el.visibility] : undefined}
       >
+        <span className="el-val" data-state={validation ?? 'none'} title={validation ? ROW_VALIDATION_LABEL[validation] : 'Not validated'} />
         <code className="el-tag">{el.tagName}</code>
         <span className="el-label truncate">{label}</span>
         {showKind && <span className="el-cat">{KIND_LABEL[elementKind(el)]}</span>}

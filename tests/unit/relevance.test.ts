@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { scanDocument } from '../../src/core/scanner'
-import { findNoise } from '../../src/shared/relevance'
+import { findNoise, isMessage } from '../../src/shared/relevance'
 
 beforeEach(() => {
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, top: 0, left: 0, width: 100, height: 20, right: 100, bottom: 20, toJSON() {} } as DOMRect)
@@ -89,6 +89,22 @@ describe('noise detection', () => {
     expect(reason('alert')).toBe('useful')
     expect(reason('live')).toBe('useful')
     expect(reason('other')).toBe('hidden')
+  })
+
+  it('treats empty error slots as messages, but never buttons with message-like classes', () => {
+    document.body.innerHTML = `
+      <div data-k="slot" id="error" style="display:none"></div>
+      <div data-k="toast" class="toast-container"></div>
+      <button data-k="btn" class="btn btn-success">Save</button>
+      <div data-k="word" class="errorless-layout"><p>x</p></div>`
+    const { result } = scanDocument(document)
+    const byKey = (k: string) => result.elements.find((e) => e.attributes['data-k'] === k)
+    const noise = findNoise(result.elements)
+    expect(byKey('slot')).toBeDefined() // extracted although empty
+    expect(noise.has(byKey('slot')!.id)).toBe(false) // and shown although hidden
+    expect(noise.has(byKey('toast')!.id)).toBe(false)
+    expect(isMessage(byKey('btn')!)).toBe(false)
+    expect(byKey('word')).toBeUndefined() // "errorless" is not the word "error"
   })
 
   it('keeps visually hidden but interactive controls (custom checkboxes)', () => {

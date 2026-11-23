@@ -4,6 +4,8 @@ import { useScanResult, useScanState, useSettings } from '../../shared/hooks'
 import type { ScanResult, ScanState } from '../../shared/types'
 import { EmptyState } from '../../shared/ui/EmptyState'
 import { PomPanel, initialPomForm, type PomForm } from '../pom-generator/PomPanel'
+import { chooseLocator } from '../../generators/playwright'
+import type { RowValidation } from './ElementList'
 import { ElementDetails } from './ElementDetails'
 import { ElementList } from './ElementList'
 import { KINDS, elementKind, filterElements, searchText, type ElementKind } from './format'
@@ -67,6 +69,17 @@ export function ElementsPage({ view }: { view: 'elements' | 'pom' }) {
     return counts
   }, [visible])
   const selected = useMemo(() => result?.elements.find((e) => e.id === selectedId), [result, selectedId])
+  // Per-row validation indicator, using the same rule the POM generator uses.
+  const rowValidation = useMemo(() => {
+    const map = new Map<string, RowValidation>()
+    if (!locators.results) return map
+    for (const e of filtered) {
+      const res = locators.results.get(e.id)
+      if (!res?.locators.some((l) => validation.resultFor(l))) continue
+      map.set(e.id, chooseLocator(res, validation.resultFor, false).ok ? 'ok' : 'bad')
+    }
+    return map
+  }, [filtered, locators.results, validation.resultFor])
 
   if (result === undefined) return null // loading from storage
 
@@ -160,6 +173,7 @@ export function ElementsPage({ view }: { view: 'elements' | 'pom' }) {
                 picked={picked}
                 onTogglePicked={togglePicked}
                 showKind={kind === 'all'}
+                rowValidation={rowValidation}
               />
             </aside>
 

@@ -62,13 +62,17 @@ export function findNoise(elements: ScannedElement[]): Map<string, NoiseReason> 
 }
 
 const MESSAGE_ROLES = new Set(['alert', 'status', 'log', 'alertdialog'])
-const MESSAGE_WORDS = /(error|alert|message|notice|notification|toast|success|warning|invalid|feedback|flash)/i
+// Whole words in ids/classes: "error", "form-error", "toast_message" — not "btnSuccess" or "errorless".
+const MESSAGE_WORDS = /(^|[\s_-])(error|errors|alert|message|messages|notice|notification|toast|success|warning|invalid|feedback|flash)([\s_-]|$)/i
 
 /** Status, error and toast messages: often hidden until something happens. */
-function isMessage(e: ScannedElement): boolean {
+export function isMessage(e: ScannedElement): boolean {
   if (e.role && MESSAGE_ROLES.has(e.role)) return true
+  // Buttons, links and fields are never messages, whatever their classes say (btn-success).
+  if (ACTIONABLE.has(elementKind(e))) return false
   if (e.attributes['aria-live'] && e.attributes['aria-live'] !== 'off') return true
-  return !!e.textContent && MESSAGE_WORDS.test(`${e.attributes.id ?? ''} ${e.attributes.class ?? ''}`)
+  // Text is not required: error slots are often empty until something fails.
+  return MESSAGE_WORDS.test(`${e.attributes.id ?? ''} ${e.attributes.class ?? ''}`)
 }
 
 /**
