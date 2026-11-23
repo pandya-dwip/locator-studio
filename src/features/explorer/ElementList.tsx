@@ -1,35 +1,26 @@
 import { memo } from 'react'
-import { CATEGORIES } from '../../shared/constants'
 import type { ScannedElement } from '../../shared/types'
-import { ENABLED_LABEL, VISIBILITY_LABEL, identifier } from './format'
+import { KINDS, VISIBILITY_LABEL, elementKind, identifier } from './format'
+
+const KIND_LABEL = Object.fromEntries(KINDS.map((k) => [k.id, k.label]))
 
 interface Props {
   elements: ScannedElement[]
   selectedId: string | null
   onSelect: (id: string) => void
+  /** Show the element type on each row (only useful on the All tab). */
+  showKind: boolean
 }
 
-export function ElementList({ elements, selectedId, onSelect }: Props) {
-  const groups = CATEGORIES.map((c) => ({ ...c, items: elements.filter((e) => e.category === c.id) })).filter(
-    (g) => g.items.length > 0,
-  )
-
-  if (groups.length === 0) return <p className="muted explorer-none">No elements match the current search and filter.</p>
-
+/** Compact, flat list in document order. Filtering by type happens in the tabs above it. */
+export function ElementList({ elements, selectedId, onSelect, showKind }: Props) {
+  if (elements.length === 0) return <p className="muted list-none">No elements match.</p>
   return (
-    <section className="el-list" aria-label="Extracted elements">
-      {groups.map((g) => (
-        <details key={g.id} className="el-group" open>
-          <summary>
-            {g.label}
-            <span className="count">{g.items.length}</span>
-          </summary>
-          {g.items.map((el) => (
-            <Row key={el.id} el={el} selected={el.id === selectedId} onSelect={onSelect} />
-          ))}
-        </details>
+    <div className="el-list" role="group" aria-label="Extracted elements">
+      {elements.map((el) => (
+        <Row key={el.id} el={el} selected={el.id === selectedId} onSelect={onSelect} showKind={showKind} />
       ))}
-    </section>
+    </div>
   )
 }
 
@@ -38,27 +29,26 @@ const Row = memo(function Row({
   el,
   selected,
   onSelect,
+  showKind,
 }: {
   el: ScannedElement
   selected: boolean
   onSelect: (id: string) => void
+  showKind: boolean
 }) {
-  const id = identifier(el)
-  const label = el.accessibleName ?? el.textContent
+  const label = el.accessibleName ?? el.textContent ?? identifier(el)
+  const hidden = el.visibility === 'hidden' || el.visibility === 'not-rendered'
   return (
     <button
       type="button"
-      className="el-row"
-      aria-current={selected ? 'true' : undefined}
+      className={`el-row${hidden ? ' el-row-hidden' : ''}`}
+      aria-pressed={selected}
       onClick={() => onSelect(el.id)}
+      title={hidden ? VISIBILITY_LABEL[el.visibility] : undefined}
     >
       <code className="el-tag">{el.tagName}</code>
-      {id && <code className="el-id truncate">{id}</code>}
       <span className="el-label truncate">{label}</span>
-      {el.enabledState === 'disabled' || el.enabledState === 'readonly' ? (
-        <span className="badge">{ENABLED_LABEL[el.enabledState]}</span>
-      ) : null}
-      <span className="vis-dot" data-vis={el.visibility} title={VISIBILITY_LABEL[el.visibility]} />
+      {showKind && <span className="el-cat">{KIND_LABEL[elementKind(el)]}</span>}
     </button>
   )
 })

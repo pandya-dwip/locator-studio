@@ -1,7 +1,6 @@
 // Pure helpers for presenting and searching scanned elements. No React, no chrome.*.
 import { TEST_ID_ATTRIBUTES } from '../../shared/constants'
 import type {
-  ElementCategory,
   EnabledStatus,
   ScannedElement,
   VisibilityReason,
@@ -64,16 +63,44 @@ export function searchText(el: ScannedElement): string {
     .toLowerCase()
 }
 
+/** What a tester calls the element. Drives the explorer tabs; derived from role and tag only. */
+export type ElementKind = 'button' | 'link' | 'field' | 'text' | 'media' | 'structure'
+
+export const KINDS: { id: ElementKind; label: string }[] = [
+  { id: 'button', label: 'Buttons' },
+  { id: 'link', label: 'Links' },
+  { id: 'field', label: 'Form fields' },
+  { id: 'text', label: 'Text' },
+  { id: 'media', label: 'Media' },
+  { id: 'structure', label: 'Structure' },
+]
+
+const BUTTON_ROLES = new Set(['button', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'treeitem'])
+const FIELD_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'listbox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'option'])
+const FIELD_TAGS = new Set(['input', 'select', 'textarea', 'option', 'optgroup', 'datalist', 'output'])
+
+export function elementKind(el: ScannedElement): ElementKind {
+  const role = el.role
+  // Checked first: <input type="submit"> and role="tab" are buttons to a tester.
+  if ((role && BUTTON_ROLES.has(role)) || el.tagName === 'button' || el.tagName === 'summary') return 'button'
+  if (role === 'link' || el.tagName === 'a') return 'link'
+  if (FIELD_TAGS.has(el.tagName) || (role && FIELD_ROLES.has(role)) || el.hints.includes('contenteditable')) return 'field'
+  if (el.category === 'interactive') return 'button' // clickable without semantics (onclick, tabindex)
+  if (el.category === 'text' || el.tagName === 'label' || el.tagName === 'legend') return 'text'
+  if (el.category === 'media') return 'media'
+  return 'structure'
+}
+
 /** Every whitespace-separated term must appear (AND search). */
 export function filterElements(
   elements: ScannedElement[],
   index: Map<string, string>,
   query: string,
-  category: ElementCategory | 'all',
+  kind: ElementKind | 'all',
 ): ScannedElement[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
   return elements.filter((el) => {
-    if (category !== 'all' && el.category !== category) return false
+    if (kind !== 'all' && elementKind(el) !== kind) return false
     if (terms.length === 0) return true
     const text = index.get(el.id) ?? ''
     return terms.every((t) => text.includes(t))

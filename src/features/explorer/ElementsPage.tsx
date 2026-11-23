@@ -1,12 +1,11 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { CircleX, ListTree, LoaderCircle, Search } from 'lucide-react'
-import { CATEGORIES } from '../../shared/constants'
 import { useScanResult, useScanState, useSettings } from '../../shared/hooks'
-import type { ElementCategory, ScanResult, ScanState } from '../../shared/types'
+import type { ScanResult, ScanState } from '../../shared/types'
 import { EmptyState } from '../../shared/ui/EmptyState'
 import { ElementDetails } from './ElementDetails'
 import { ElementList } from './ElementList'
-import { filterElements, searchText } from './format'
+import { KINDS, elementKind, filterElements, searchText, type ElementKind } from './format'
 import { useLocators } from './useLocators'
 import './explorer.css'
 
@@ -17,147 +16,122 @@ export function ElementsPage() {
   const locators = useLocators(result, testIdAttribute)
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query) // typing stays responsive on large scans
-  const [category, setCategory] = useState<ElementCategory | 'all'>('all')
+  const [kind, setKind] = useState<ElementKind | 'all'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   useEffect(() => setSelectedId(null), [result?.scanId])
 
   const index = useMemo(() => new Map(result?.elements.map((e) => [e.id, searchText(e)])), [result])
   const filtered = useMemo(
-    () => (result ? filterElements(result.elements, index, deferredQuery, category) : []),
-    [result, index, deferredQuery, category],
+    () => (result ? filterElements(result.elements, index, deferredQuery, kind) : []),
+    [result, index, deferredQuery, kind],
   )
+  const kindCounts = useMemo(() => {
+    const counts = new Map<ElementKind, number>()
+    for (const e of result?.elements ?? []) counts.set(elementKind(e), (counts.get(elementKind(e)) ?? 0) + 1)
+    return counts
+  }, [result])
   const selected = useMemo(() => result?.elements.find((e) => e.id === selectedId), [result, selectedId])
 
   if (result === undefined) return null // loading from storage
 
   if (!result) {
-    if (state?.status === 'scanning') {
-      return <EmptyState icon={LoaderCircle} title="Scanning…">Extracting elements from the page.</EmptyState>
-    }
-    if (state?.status === 'error') {
-      return <EmptyState icon={CircleX} title="Scan failed">{state.error}</EmptyState>
-    }
     return (
-      <EmptyState icon={ListTree} title="No scan yet">
-        Open a page, click the Locator Studio toolbar icon and press <strong>Scan page</strong>. Extracted elements
-        appear here.
-      </EmptyState>
+      <div className="explorer-empty">
+        {state?.status === 'scanning' ? (
+          <EmptyState icon={LoaderCircle} title="Scanning…">Extracting elements from the page.</EmptyState>
+        ) : state?.status === 'error' ? (
+          <EmptyState icon={CircleX} title="Scan failed">{state.error}</EmptyState>
+        ) : (
+          <EmptyState icon={ListTree} title="No scan yet">
+            Open a page, click the Locator Studio toolbar icon and press <strong>Scan page</strong>.
+          </EmptyState>
+        )}
+      </div>
     )
   }
 
   return (
     <div className="explorer">
-      <ScanBanners state={state} result={result} />
-      <SummaryBar result={result} />
+      <ScanHeader state={state} result={result} />
 
       {result.elements.length === 0 ? (
-        <EmptyState icon={ListTree} title="No relevant elements found">
-          The page has no interactive, form, text or structural elements the scanner recognises. If the content
-          loads late or lives in an iframe, scan again once it is visible.
-        </EmptyState>
+        <div className="explorer-empty">
+          <EmptyState icon={ListTree} title="No relevant elements found">
+            If the content loads late or lives in an iframe, scan again once it is visible.
+          </EmptyState>
+        </div>
       ) : (
         <>
-          <div className="explorer-toolbar">
-            <label className="search">
-              <Search size={14} aria-hidden="true" />
-              <input
-                type="search"
-                placeholder="Search tag, id, class, name, text, attributes…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                aria-label="Search elements"
-              />
-            </label>
-            <div className="filters" role="radiogroup" aria-label="Category filter">
-              <FilterChip active={category === 'all'} onClick={() => setCategory('all')}>
-                All <span className="count">{result.summary.totalElements}</span>
-              </FilterChip>
-              {CATEGORIES.filter((c) => result.summary.byCategory[c.id] > 0).map((c) => (
-                <FilterChip key={c.id} active={category === c.id} onClick={() => setCategory(c.id)}>
-                  {c.label} <span className="count">{result.summary.byCategory[c.id]}</span>
-                </FilterChip>
-              ))}
+        <nav className="kind-tabs" aria-label="Element type">
+          <KindTab active={kind === 'all'} onClick={() => setKind('all')} label="All" count={result.elements.length} />
+          {KINDS.map((k) => (
+            <KindTab key={k.id} active={kind === k.id} onClick={() => setKind(k.id)} label={k.label} count={kindCounts.get(k.id) ?? 0} />
+          ))}
+        </nav>
+        <div className="explorer-body">
+          <aside className="explorer-list">
+            <div className="list-tools">
+              <label className="search">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  type="search"
+                  placeholder="Search elements"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  aria-label="Search by tag, id, class, name, text or attribute"
+                />
+              </label>
+              {query && <p className="muted list-count">{filtered.length} match{filtered.length === 1 ? '' : 'es'}</p>}
             </div>
-          </div>
+            <ElementList elements={filtered} selectedId={selectedId} onSelect={setSelectedId} showKind={kind === 'all'} />
+          </aside>
 
-          <p className="muted explorer-count">
-            Showing {filtered.length} of {result.summary.totalElements}
-          </p>
-
-          <div className="explorer-split">
-            <ElementList elements={filtered} selectedId={selectedId} onSelect={setSelectedId} />
+          <section className="explorer-main">
             <ElementDetails element={selected} result={result} locators={locators} onSelect={setSelectedId} />
-          </div>
+          </section>
+        </div>
         </>
       )}
     </div>
   )
 }
 
-function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function KindTab({ active, onClick, label, count }: { active: boolean; onClick: () => void; label: string; count: number }) {
   return (
-    <button type="button" role="radio" aria-checked={active} className="filter-chip" onClick={onClick}>
-      {children}
+    <button type="button" className="kind-tab" aria-pressed={active} onClick={onClick} disabled={count === 0 && !active}>
+      {label} <span className="kind-count">{count}</span>
     </button>
   )
 }
 
-function ScanBanners({ state, result }: { state: ScanState | null; result: ScanResult }) {
+/** One line: which page was scanned, a few counts, and any scan problems. */
+function ScanHeader({ state, result }: { state: ScanState | null; result: ScanResult }) {
   const { summary } = result
+  const hidden = summary.byVisibility.hidden + summary.byVisibility['not-rendered']
   return (
-    <>
+    <header className="scan-header">
+      <div className="scan-page">
+        <h1 className="truncate" title={result.url}>{result.title || result.url}</h1>
+        <p className="muted truncate">
+          {summary.totalElements} elements · {summary.byVisibility.visible} visible · {hidden} hidden ·{' '}
+          {new Date(result.timestamp).toLocaleTimeString()}
+          {summary.framesNotScanned > 0 && ` · ${summary.framesNotScanned} iframes not scanned`}
+        </p>
+      </div>
       {state?.status === 'scanning' && (
-        <p className="banner" role="status">
-          <LoaderCircle size={14} className="spin" /> Scanning… the list updates when the new scan finishes.
+        <p className="scan-flag" role="status">
+          <LoaderCircle size={14} className="spin" /> Scanning…
         </p>
       )}
       {state?.status === 'error' && (
-        <p className="banner banner-error" role="alert">
-          Latest scan failed: {state.error} Showing the previous scan.
+        <p className="scan-flag scan-flag-error" role="alert" title={state.error}>
+          Latest scan failed: {state.error}
         </p>
       )}
       {summary.truncated && (
-        <p className="banner banner-warn">
-          Stopped at {summary.elementLimit} elements. The rest of the page was not scanned.
-        </p>
+        <p className="scan-flag scan-flag-warn">Stopped at {summary.elementLimit} elements</p>
       )}
-    </>
-  )
-}
-
-function SummaryBar({ result }: { result: ScanResult }) {
-  const { summary } = result
-  const hidden = summary.byVisibility.hidden + summary.byVisibility['not-rendered']
-  const stats: [string, number][] = [
-    ['Total', summary.totalElements],
-    ['Interactive', summary.byCategory.interactive],
-    ['Form', summary.byCategory.form],
-    ['Text', summary.byCategory.text],
-    ['Structural', summary.byCategory.structural],
-    ['Visible', summary.byVisibility.visible],
-    ['Hidden', hidden],
-  ]
-  return (
-    <section className="summary card" aria-label="Scan summary">
-      <div className="summary-page">
-        <span className="truncate" title={result.url}>{result.title || result.url}</span>
-        <span className="muted">
-          {new Date(result.timestamp).toLocaleString()} · {summary.durationMs} ms
-          {summary.byVisibility.obscured > 0 && ` · ${summary.byVisibility.obscured} obscured`}
-          {summary.shadowRootsScanned > 0 && ` · ${summary.shadowRootsScanned} shadow roots`}
-          {summary.framesNotScanned > 0 && ` · ${summary.framesNotScanned} iframes not scanned`}
-          {summary.skippedElements > 0 && ` · ${summary.skippedElements} skipped`}
-        </span>
-      </div>
-      <dl className="summary-stats">
-        {stats.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
+    </header>
   )
 }

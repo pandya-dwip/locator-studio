@@ -1,25 +1,22 @@
 import { useEffect, useState } from 'react'
-import { Crosshair, FileCode, LayoutDashboard, ListTree, MousePointerClick, Settings, type LucideIcon } from 'lucide-react'
-import { DashboardPage } from '../features/dashboard/DashboardPage'
+import { Crosshair, FileCode, ListTree, Settings, type LucideIcon } from 'lucide-react'
 import { ElementsPage } from '../features/explorer/ElementsPage'
-import { InspectorPage } from '../features/inspector/InspectorPage'
 import { PomGeneratorPage } from '../features/pom-generator/PomGeneratorPage'
 import { SettingsPage } from '../features/settings/SettingsPage'
 
 interface Route {
   id: string
   label: string
-  description: string
   icon: LucideIcon
   Page: () => React.ReactNode
+  /** Full-height page that manages its own layout and header (no page title bar). */
+  fullHeight?: boolean
 }
 
 const ROUTES: Route[] = [
-  { id: 'dashboard', label: 'Dashboard', description: 'Overview of the latest scan.', icon: LayoutDashboard, Page: DashboardPage },
-  { id: 'elements', label: 'Elements', description: 'Browse, search and inspect elements extracted from the scanned page.', icon: ListTree, Page: ElementsPage },
-  { id: 'inspector', label: 'Inspector', description: 'Inspect and highlight a single element.', icon: MousePointerClick, Page: InspectorPage },
-  { id: 'pom', label: 'POM Generator', description: 'Generate Playwright Page Object Model code.', icon: FileCode, Page: PomGeneratorPage },
-  { id: 'settings', label: 'Settings', description: 'Preferences for Locator Studio.', icon: Settings, Page: SettingsPage },
+  { id: 'elements', label: 'Elements', icon: ListTree, Page: ElementsPage, fullHeight: true },
+  { id: 'pom', label: 'POM Generator', icon: FileCode, Page: PomGeneratorPage },
+  { id: 'settings', label: 'Settings', icon: Settings, Page: SettingsPage },
 ]
 
 const routeFromHash = () => ROUTES.find((r) => r.id === location.hash.slice(1)) ?? ROUTES[0]!
@@ -58,15 +55,20 @@ export function Workspace() {
         <footer className="sidebar-footer">v{chrome.runtime.getManifest().version}</footer>
       </aside>
 
-      <main className="content">
-        <header className="content-header">
-          <h2>{route.label}</h2>
-          <p className="muted">{route.description}</p>
-        </header>
-        <div className="content-body">
+      {route.fullHeight ? (
+        <main className="content content-full">
           <route.Page />
-        </div>
-      </main>
+        </main>
+      ) : (
+        <main className="content">
+          <header className="content-header">
+            <h2>{route.label}</h2>
+          </header>
+          <div className="content-body">
+            <route.Page />
+          </div>
+        </main>
+      )}
     </div>
   )
 }

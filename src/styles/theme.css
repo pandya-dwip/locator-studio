@@ -145,3 +145,38 @@ code, kbd { font-family: var(--font-mono); font-size: 12px; }
 .segmented label:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .segmented label:has(input:focus-visible) { box-shadow: var(--focus-ring); }
 .segmented label:has(input:disabled) { cursor: not-allowed; }
+
+/* Code block (shared: locators now, generated POM code later) */
+.code-block { position: relative; }
+.code-block pre {
+  margin: 0;
+  padding: 12px 44px 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+.code-block-compact pre { padding-top: 8px; padding-bottom: 8px; }
+.code-block code { font-size: inherit; }
+.code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.code-block-compact .code-copy { top: 50%; transform: translateY(-50%); }
+.code-copy:hover { color: var(--text); border-color: var(--border-strong); }
+.code-error { margin-top: 6px; }

@@ -5,7 +5,7 @@ import { highlightElement } from '../../shared/messaging'
 import type { ScannedElement, ScanResult } from '../../shared/types'
 import { EmptyState } from '../../shared/ui/EmptyState'
 import { errorMessage } from '../../shared/utils'
-import { ENABLED_LABEL, REASON_LABEL, VISIBILITY_LABEL } from './format'
+import { ENABLED_LABEL, REASON_LABEL, VISIBILITY_LABEL, identifier } from './format'
 import { LocatorPanel } from './LocatorPanel'
 import type { LocatorState } from './useLocators'
 
@@ -18,6 +18,7 @@ interface Props {
   onSelect: (id: string) => void
 }
 
+/** Main panel: the selected element, its locators, and (collapsed) its raw metadata. */
 export function ElementDetails({ element: el, result, locators, onSelect }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -25,11 +26,11 @@ export function ElementDetails({ element: el, result, locators, onSelect }: Prop
 
   if (!el) {
     return (
-      <aside className="el-details">
-        <EmptyState icon={MousePointerClick} title="No element selected">
-          Select an element to see its attributes, state and structure.
+      <div className="detail-empty">
+        <EmptyState icon={MousePointerClick} title="Select an element">
+          Choose an element from the list to see its Playwright locators.
         </EmptyState>
-      </aside>
+      </div>
     )
   }
 
@@ -49,11 +50,22 @@ export function ElementDetails({ element: el, result, locators, onSelect }: Prop
   const parent = el.parentId ? result.elements.find((e) => e.id === el.parentId) : undefined
   const properties = Object.entries(el.properties).filter(([, v]) => v !== undefined)
   const attributes = Object.entries(el.attributes)
+  const title = el.accessibleName ?? el.textContent ?? identifier(el)
 
   return (
-    <aside className="el-details card" aria-label="Element details">
-      <header className="el-details-header">
-        <code className="el-details-tag">&lt;{el.tagName}&gt;</code>
+    <article className="detail" aria-label="Selected element">
+      <header className="detail-header">
+        <div className="detail-title">
+          <h2>
+            <code>&lt;{el.tagName}&gt;</code>
+            {title && <span className="truncate">{title}</span>}
+          </h2>
+          <p className="muted">
+            {categoryLabel(el.category)}
+            {el.role && ` · role ${el.role}`} · {VISIBILITY_LABEL[el.visibility]}
+            {el.enabledState !== 'not-applicable' && ` · ${ENABLED_LABEL[el.enabledState]}`}
+          </p>
+        </div>
         <button className="btn" onClick={handleHighlight} disabled={busy || result.tabId === undefined}>
           {busy ? <LoaderCircle size={14} className="spin" /> : <Crosshair size={14} />}
           Highlight on page
@@ -61,72 +73,61 @@ export function ElementDetails({ element: el, result, locators, onSelect }: Prop
       </header>
       {error && <p className="error" role="alert">{error}</p>}
 
-      <div className="chips">
-        {el.categories.map((c, i) => (
-          <span key={c} className={`chip${i === 0 ? ' chip-primary' : ''}`}>{categoryLabel(c)}</span>
-        ))}
-        {el.hints.map((h) => (
-          <span key={h} className="chip chip-hint">{h}</span>
-        ))}
-      </div>
-
       <section className="detail-section">
         <h3>Locators</h3>
         <LocatorPanel result={locators.results?.get(el.id)} pending={locators.pending} error={locators.error} />
       </section>
 
-      <Section title="Identity">
-        <Field label="Accessible name">
-          {el.accessibleName}
-          {el.accessibleNameSource && <span className="muted"> · from {NAME_SOURCE_LABEL[el.accessibleNameSource]}</span>}
-        </Field>
-        <Field label="Role">{el.role && `${el.role} (${el.roleSource})`}</Field>
-        <Field label="Text">{el.textContent}</Field>
-      </Section>
-
-      <Section title="State">
-        <Field label="Visibility">
-          <span className="vis-dot" data-vis={el.visibility} /> {VISIBILITY_LABEL[el.visibility]}
-          <span className="muted"> · {REASON_LABEL[el.visibilityReason]}</span>
-        </Field>
-        <Field label="Enabled">{ENABLED_LABEL[el.enabledState]}</Field>
-        {properties.map(([k, v]) => (
-          <Field key={k} label={k}>{String(v)}</Field>
-        ))}
-      </Section>
-
-      <Section title={`Attributes (${attributes.length})`}>
-        {attributes.length === 0 && <p className="muted">No collected attributes.</p>}
-        {attributes.map(([k, v]) => (
-          <Field key={k} label={k} mono>{v}</Field>
-        ))}
-      </Section>
-
-      <Section title="Structure">
-        <Field label="Parent">
-          {parent ? (
-            <button className="link-btn" onClick={() => onSelect(parent.id)}>
-              &lt;{parent.tagName}&gt; {parent.accessibleName ?? ''}
-            </button>
-          ) : (
-            el.parentTagName && <code>&lt;{el.parentTagName}&gt;</code>
-          )}
-        </Field>
-        <Field label="Child elements">{String(el.childElementCount)}</Field>
-        <Field label="Depth">{String(el.depth)}</Field>
-        <Field label="In shadow DOM">{el.inShadowRoot ? 'Yes (open shadow root)' : 'No'}</Field>
-        <Field label="Custom element">{el.isCustomElement ? 'Yes' : 'No'}</Field>
-      </Section>
-    </aside>
-  )
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="detail-section">
-      <h3>{title}</h3>
-      <dl>{children}</dl>
-    </section>
+      <details className="detail-section detail-more">
+        <summary>
+          <h3>Element details</h3>
+        </summary>
+        <dl className="facts">
+          <Field label="Accessible name">
+            {el.accessibleName}
+            {el.accessibleNameSource && <span className="muted"> · from {NAME_SOURCE_LABEL[el.accessibleNameSource]}</span>}
+          </Field>
+          <Field label="Role">{el.role && `${el.role} (${el.roleSource})`}</Field>
+          <Field label="Text">{el.textContent}</Field>
+          <Field label="Categories">
+            {el.categories.map(categoryLabel).join(', ')}
+            {el.hints.length > 0 && <span className="muted"> · hints: {el.hints.join(', ')}</span>}
+          </Field>
+          <Field label="Visibility">
+            {VISIBILITY_LABEL[el.visibility]}
+            <span className="muted"> · {REASON_LABEL[el.visibilityReason]}</span>
+          </Field>
+          <Field label="Enabled">{ENABLED_LABEL[el.enabledState]}</Field>
+          {properties.map(([k, v]) => (
+            <Field key={k} label={k}>{String(v)}</Field>
+          ))}
+          <Field label="Parent">
+            {parent ? (
+              <button className="link-btn" onClick={() => onSelect(parent.id)}>
+                &lt;{parent.tagName}&gt; {parent.accessibleName ?? ''}
+              </button>
+            ) : (
+              el.parentTagName && <code>&lt;{el.parentTagName}&gt;</code>
+            )}
+          </Field>
+          <Field label="Structure">
+            {el.childElementCount} child elements · depth {el.depth}
+            {el.inShadowRoot && ' · in open shadow root'}
+            {el.isCustomElement && ' · custom element'}
+          </Field>
+        </dl>
+        <h4 className="facts-title">Attributes ({attributes.length})</h4>
+        {attributes.length === 0 ? (
+          <p className="muted">No collected attributes.</p>
+        ) : (
+          <dl className="facts">
+            {attributes.map(([k, v]) => (
+              <Field key={k} label={k} mono>{v}</Field>
+            ))}
+          </dl>
+        )}
+      </details>
+    </article>
   )
 }
 

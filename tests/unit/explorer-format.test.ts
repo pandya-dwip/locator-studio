@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterElements, identifier, searchText } from '../../src/features/explorer/format'
+import { elementKind, filterElements, identifier, searchText } from '../../src/features/explorer/format'
 import type { ScannedElement } from '../../src/shared/types'
 
 function element(id: string, partial: Partial<ScannedElement>): ScannedElement {
@@ -43,8 +43,25 @@ describe('explorer search and filter', () => {
   it('requires every search term (AND) and combines with the category filter', () => {
     expect(ids(filterElements(elements, index, 'save primary', 'all'))).toEqual(['a'])
     expect(ids(filterElements(elements, index, 'save welcome', 'all'))).toEqual([])
-    expect(ids(filterElements(elements, index, '', 'form'))).toEqual(['b'])
-    expect(ids(filterElements(elements, index, 'save', 'form'))).toEqual([])
+    expect(ids(filterElements(elements, index, '', 'field'))).toEqual(['b'])
+    expect(ids(filterElements(elements, index, 'save', 'field'))).toEqual([])
+  })
+
+  it('sorts elements into tester-facing tabs by role and tag', () => {
+    const kind = (p: Partial<ScannedElement>) => elementKind(element('x', p))
+    expect(kind({ tagName: 'button', role: 'button' })).toBe('button')
+    expect(kind({ tagName: 'input', role: 'button', category: 'form' })).toBe('button') // type=submit
+    expect(kind({ tagName: 'div', role: 'tab', category: 'interactive' })).toBe('button')
+    expect(kind({ tagName: 'div', category: 'interactive', hints: ['onclick-attribute'] })).toBe('button')
+    expect(kind({ tagName: 'a', role: 'link', category: 'interactive' })).toBe('link')
+    expect(kind({ tagName: 'input', role: 'textbox', category: 'form' })).toBe('field')
+    expect(kind({ tagName: 'div', role: 'checkbox', category: 'interactive' })).toBe('field')
+    expect(kind({ tagName: 'select', category: 'form' })).toBe('field')
+    expect(kind({ tagName: 'label', category: 'form' })).toBe('text')
+    expect(kind({ tagName: 'h1', category: 'text' })).toBe('text')
+    expect(kind({ tagName: 'img', category: 'media' })).toBe('media')
+    expect(kind({ tagName: 'nav', category: 'navigation' })).toBe('structure')
+    expect(kind({ tagName: 'form', category: 'form' })).toBe('structure')
   })
 
   it('builds short identifiers', () => {

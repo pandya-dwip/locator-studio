@@ -293,9 +293,7 @@ A locator's real match count depends on the **live page**: elements the scanner 
 
 ### Workspace
 
-Select an element in **Elements** to see its **Locators**:
-- every candidate with its strategy, a readable value, a stability badge, a ★ for the recommendation and a *shared* badge where it applies;
-- for the selected candidate: the full expression with a **Copy** button, stability and its reasons, the attributes it was built from, notes, and its uniqueness status.
+**Elements** has two panes. On the left is a compact, searchable element list with a category filter. On the right is the main panel for the selected element. Its **Locators** are listed there, recommended first. Each one shows its strategy, a stability badge, a *shared* badge where it applies, the full expression in a wide code block with a **Copy** button, its stability reasons and the attributes it was built from. Raw metadata (attributes, state, structure) is under the collapsed **Element details**.
 
 **Settings → Test ID attribute** must match `testIdAttribute` in your `playwright.config`.
 
@@ -344,8 +342,8 @@ locator-studio/
 │   │   ├── scanner/         DOM Scanner v1: traversal, classification, visibility, text
 │   │   ├── locator-engine/  Locator Engine: strategies, escaping, stability, recommendation
 │   │   └── validator/       Uniqueness and quality checks (next milestone)
-│   ├── features/            Workspace pages: dashboard, explorer (Elements + Locators panel), inspector,
-│   │                        pom-generator, settings, export
+│   ├── features/            Workspace pages: explorer (Elements + Locators), pom-generator,
+│   │                        settings, export
 │   ├── generators/playwright/  POM code generation, TS + JS (next milestone)
 │   ├── shared/
 │   │   ├── types/           Message, scan and settings types
