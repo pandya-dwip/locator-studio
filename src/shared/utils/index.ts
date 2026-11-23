@@ -18,7 +18,7 @@ export function friendlyTabError(err: unknown): string {
     return 'Permission expired. Reopen Locator Studio from the toolbar on this tab and scan again.'
   if (/No tab with id/i.test(msg)) return 'The scanned tab has been closed. Scan a page again.'
   if (/Receiving end does not exist|message port closed/i.test(msg))
-    return 'Could not reach the page. It may have reloaded or navigated since the scan. Scan it again.'
+    return 'Locator Studio is no longer connected to the scanned page: it reloaded or navigated, or the extension was reloaded, after the scan. Go back to that tab, click the Locator Studio toolbar icon and press Scan page.'
   if (/QUOTA_BYTES|quota/i.test(msg))
     return 'The scan result is too large to store locally. Try scanning a smaller page.'
   return msg

@@ -91,7 +91,7 @@ export function ElementDetails({ element: el, result, locators, validation, pick
             type="button"
             className="link-btn"
             onClick={() => void validation.validateElements([el.id])}
-            disabled={!!validation.running || !locators.results}
+            disabled={!!validation.running || !locators.results || validation.connection === 'lost' || validation.connection === 'rescanned'}
           >
             <RefreshCw size={12} /> Revalidate
           </button>

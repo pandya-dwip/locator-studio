@@ -56,3 +56,23 @@
 .pom-list ul { margin: 0; padding: 0; list-style: none; }
 .pom-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; padding: 4px 0; border-top: 1px solid var(--border); font-size: 12px; }
 .input-mono { width: 100%; font-family: var(--font-mono); font-size: 12px; }
+
+/* File switch: Page Object / test data */
+.file-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.file-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.file-tab:hover { color: var(--text); background: var(--surface-hover); }
+.file-tab[aria-selected='true'] { color: var(--text); background: var(--surface-2); }
+.file-none { font-size: 12px; padding-left: 8px; }

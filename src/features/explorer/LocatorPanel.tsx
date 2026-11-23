@@ -77,7 +77,7 @@ export function LocatorPanel({ elementId, result, pending, error, validation }: 
           locator={l}
           validation={validation.resultFor(l)}
           marker={anyValidated ? (l.id === validatedPick ? 'best' : undefined) : l.isRecommended ? 'recommended' : undefined}
-          busy={!!validation.running}
+          busy={!!validation.running || validation.connection === 'lost' || validation.connection === 'rescanned'}
           onCheck={() => validation.validateLocator(elementId, l)}
         />
       ))}

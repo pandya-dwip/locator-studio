@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { CircleX, ListTree, LoaderCircle, Search, ShieldCheck } from 'lucide-react'
+import { CircleX, ListTree, LoaderCircle, Search, ShieldCheck, Unplug } from 'lucide-react'
 import { useScanResult, useScanState, useSettings } from '../../shared/hooks'
 import type { ScanResult, ScanState } from '../../shared/types'
 import { EmptyState } from '../../shared/ui/EmptyState'
@@ -8,7 +8,8 @@ import { ElementDetails } from './ElementDetails'
 import { ElementList } from './ElementList'
 import { KINDS, elementKind, filterElements, searchText, type ElementKind } from './format'
 import { useLocators } from './useLocators'
-import { useValidation, type ValidationState } from './useValidation'
+import { DISCONNECTED_HELP, useValidation, type ValidationState } from './useValidation'
+import { findNoise } from '../../shared/relevance'
 import './explorer.css'
 
 /** Elements and POM Generator share this page: same list on the left, different main panel. */
@@ -21,6 +22,8 @@ export function ElementsPage({ view }: { view: 'elements' | 'pom' }) {
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query) // typing stays responsive on large scans
   const [kind, setKind] = useState<ElementKind | 'all'>('all')
+  /** Off by default: layout wrappers, hidden duplicates, decorative icons and labels are hidden. */
+  const [showAll, setShowAll] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   /** Elements ticked for the Page Object. */
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -37,21 +40,32 @@ export function ElementsPage({ view }: { view: 'elements' | 'pom' }) {
   // Validate the selected element's candidates once, when it is first opened (read-only DOM queries).
   useEffect(() => {
     if (!selectedId || !locators.results?.has(selectedId) || validation.running || validation.error) return
+    if (validation.connection !== 'connected') return
     if (autoValidated.current.has(selectedId)) return
     autoValidated.current.add(selectedId)
     void validation.validateElements([selectedId])
   }, [selectedId, locators.results, validation])
 
   const index = useMemo(() => new Map(result?.elements.map((e) => [e.id, searchText(e)])), [result])
+  const noise = useMemo(() => findNoise(result?.elements ?? []), [result])
+  // Useful elements: not noise, and something Playwright can locate (once locators are ready).
+  const useful = useMemo(
+    () =>
+      (result?.elements ?? []).filter(
+        (e) => !noise.has(e.id) && (locators.results ? (locators.results.get(e.id)?.locators.length ?? 0) > 0 : true),
+      ),
+    [result, noise, locators.results],
+  )
+  const visible = showAll ? (result?.elements ?? []) : useful
   const filtered = useMemo(
-    () => (result ? filterElements(result.elements, index, deferredQuery, kind) : []),
-    [result, index, deferredQuery, kind],
+    () => filterElements(visible, index, deferredQuery, kind),
+    [visible, index, deferredQuery, kind],
   )
   const kindCounts = useMemo(() => {
     const counts = new Map<ElementKind, number>()
-    for (const e of result?.elements ?? []) counts.set(elementKind(e), (counts.get(elementKind(e)) ?? 0) + 1)
+    for (const e of visible) counts.set(elementKind(e), (counts.get(elementKind(e)) ?? 0) + 1)
     return counts
-  }, [result])
+  }, [visible])
   const selected = useMemo(() => result?.elements.find((e) => e.id === selectedId), [result, selectedId])
 
   if (result === undefined) return null // loading from storage
@@ -95,7 +109,7 @@ export function ElementsPage({ view }: { view: 'elements' | 'pom' }) {
 
   return (
     <div className="explorer">
-      <ScanHeader state={state} result={result} validation={validation} canValidate={!!locators.results} />
+      <ScanHeader state={state} result={result} usefulCount={useful.length} validateIds={visible.map((e) => e.id)} validation={validation} canValidate={!!locators.results} />
 
       {result.elements.length === 0 ? (
         <div className="explorer-empty">
@@ -106,7 +120,7 @@ export function ElementsPage({ view }: { view: 'elements' | 'pom' }) {
       ) : (
         <>
           <nav className="kind-tabs" aria-label="Element type">
-            <KindTab active={kind === 'all'} onClick={() => setKind('all')} label="All" count={result.elements.length} />
+            <KindTab active={kind === 'all'} onClick={() => setKind('all')} label="All" count={visible.length} />
             {KINDS.map((k) => (
               <KindTab key={k.id} active={kind === k.id} onClick={() => setKind(k.id)} label={k.label} count={kindCounts.get(k.id) ?? 0} />
             ))}
@@ -134,6 +148,10 @@ export function ElementsPage({ view }: { view: 'elements' | 'pom' }) {
                     {query ? `${filtered.length} match${filtered.length === 1 ? '' : 'es'}` : `${filtered.length} shown`}
                   </span>
                 </div>
+                <label className="check" title="Also show layout containers, hidden elements, decorative icons, labels and elements without any locator">
+                  <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+                  Show all elements ({result.elements.length - useful.length} hidden as noise)
+                </label>
               </div>
               <ElementList
                 elements={filtered}
@@ -186,11 +204,16 @@ function KindTab({ active, onClick, label, count }: { active: boolean; onClick: 
 function ScanHeader({
   state,
   result,
+  usefulCount,
+  validateIds,
   validation,
   canValidate,
 }: {
   state: ScanState | null
   result: ScanResult
+  usefulCount: number
+  /** The elements currently shown: Validate all checks these. */
+  validateIds: string[]
   validation: ValidationState
   canValidate: boolean
 }) {
@@ -201,7 +224,7 @@ function ScanHeader({
       <div className="scan-page">
         <h1 className="truncate" title={result.url}>{result.title || result.url}</h1>
         <p className="muted truncate">
-          {summary.totalElements} elements · {summary.byVisibility.visible} visible · {hidden} hidden ·{' '}
+          {usefulCount} useful of {summary.totalElements} found · {summary.byVisibility.visible} visible · {hidden} hidden ·{' '}
           {new Date(result.timestamp).toLocaleTimeString()}
           {summary.framesNotScanned > 0 && ` · ${summary.framesNotScanned} iframes not scanned`}
           {validation.validatedElements > 0 && ` · ${validation.validatedElements} element${validation.validatedElements === 1 ? '' : 's'} validated`}
@@ -218,21 +241,25 @@ function ScanHeader({
         </p>
       )}
       {summary.truncated && <p className="scan-flag scan-flag-warn">Stopped at {summary.elementLimit} elements</p>}
-      {validation.error && (
+      {validation.error && validation.connection === 'connected' && (
         <p className="scan-flag scan-flag-error" role="alert" title={validation.error}>
           Validation failed: {validation.error}
         </p>
       )}
-      {validation.running ? (
+      {validation.connection === 'lost' || validation.connection === 'rescanned' ? (
+        <p className="scan-flag scan-flag-warn" role="status" title={DISCONNECTED_HELP[validation.connection]}>
+          <Unplug size={14} /> Not connected to the page. Scan it again to validate.
+        </p>
+      ) : validation.running ? (
         <p className="scan-flag" role="status">
           <LoaderCircle size={14} className="spin" /> Validating {validation.running.done}/{validation.running.total}
         </p>
       ) : (
         <button
           className="btn"
-          onClick={() => void validation.validateElements(result.elements.map((e) => e.id))}
+          onClick={() => void validation.validateElements(validateIds)}
           disabled={!canValidate}
-          title="Check every locator candidate against the live page"
+          title="Check every locator candidate of the shown elements against the live page"
         >
           <ShieldCheck size={14} /> Validate all
         </button>

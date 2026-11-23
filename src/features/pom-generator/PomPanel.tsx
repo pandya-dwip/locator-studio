@@ -4,15 +4,17 @@ import {
   defaultClassName,
   elementLabel,
   generatePom,
+  generateTestData,
   isPomEligible,
   type ModuleFormat,
 } from '../../generators/playwright'
 import { useSettings } from '../../shared/hooks'
+import { findNoise } from '../../shared/relevance'
 import type { OutputLanguage, ScanResult } from '../../shared/types'
 import { errorMessage } from '../../shared/utils'
 import { updateSettings } from '../../storage'
 import type { LocatorState } from '../explorer/useLocators'
-import type { ValidationState } from '../explorer/useValidation'
+import { DISCONNECTED_HELP, type ValidationState } from '../explorer/useValidation'
 import './pom.css'
 
 /** Generator options that live with the explorer (they survive switching views). */
@@ -24,9 +26,13 @@ export interface PomForm {
   includeMethods: boolean
   allowUnvalidated: boolean
   propertyNames: Record<string, string>
-  /** User edits to the code, and the generated code they were based on. */
-  edited: { code: string; base: string } | null
+  /** Which generated file the editor shows. */
+  file: FileKind
+  /** User edits per file, and the generated code they were based on. */
+  edited: Partial<Record<FileKind, { code: string; base: string }>>
 }
+
+export type FileKind = 'pom' | 'data'
 
 export const initialPomForm: PomForm = {
   scope: 'eligible',
@@ -35,7 +41,8 @@ export const initialPomForm: PomForm = {
   includeMethods: true,
   allowUnvalidated: false,
   propertyNames: {},
-  edited: null,
+  file: 'pom',
+  edited: {},
 }
 
 interface Props {
@@ -54,7 +61,11 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
   const [actionError, setActionError] = useState<string | null>(null)
 
   const fallbackClass = useMemo(() => defaultClassName(scan.title, scan.url), [scan])
-  const eligibleIds = useMemo(() => scan.elements.filter(isPomEligible).map((e) => e.id), [scan])
+  // "All eligible" skips the same noise the explorer hides (hidden duplicates, wrappers, icons).
+  const eligibleIds = useMemo(() => {
+    const noise = findNoise(scan.elements)
+    return scan.elements.filter((e) => isPomEligible(e) && !noise.has(e.id)).map((e) => e.id)
+  }, [scan])
   const scopeIds = form.scope === 'selected' ? scan.elements.filter((e) => picked.has(e.id)).map((e) => e.id) : eligibleIds
 
   const pom = useMemo(
@@ -89,8 +100,17 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
     )
   }
 
-  const code = form.edited?.code ?? pom.code
-  const outdated = form.edited !== null && form.edited.base !== pom.code
+  const testData = generateTestData(scan, pom, { language, moduleFormat: form.moduleFormat })
+  const files: Record<FileKind, { fileName: string; generated: string } | null> = {
+    pom: { fileName: pom.fileName, generated: pom.code },
+    data: testData && { fileName: testData.fileName, generated: testData.code },
+  }
+  const fileKind: FileKind = files[form.file] ? form.file : 'pom'
+  const active = files[fileKind]!
+  const edited = form.edited[fileKind]
+  const code = edited?.code ?? active.generated
+  const outdated = !!edited && edited.base !== active.generated
+  const setEdited = (value: { code: string; base: string } | undefined) => set({ edited: { ...form.edited, [fileKind]: value } })
   const validatedInScope = scopeIds.filter((id) => locators.results?.get(id)?.locators.some((l) => validation.resultFor(l))).length
   const unvalidatedIncluded = pom.properties.filter((p) => !p.validated).length
 
@@ -109,7 +129,7 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
     const url = URL.createObjectURL(new Blob([code], { type: 'text/plain;charset=utf-8' }))
     const a = document.createElement('a')
     a.href = url
-    a.download = pom!.fileName
+    a.download = active.fileName
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
@@ -182,7 +202,7 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
           <strong>{pom.excluded.length}</strong> excluded · {validatedInScope} of {scopeIds.length} elements validated
           {pom.methods.length > 0 && ` · methods: ${pom.methods.join(', ')}`}
         </p>
-        {validation.running ? (
+        {validation.connection === 'lost' || validation.connection === 'rescanned' ? null : validation.running ? (
           <span className="muted loc-pending">
             <LoaderCircle size={14} className="spin" /> Validating {validation.running.done}/{validation.running.total}
           </span>
@@ -196,18 +216,33 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
           </button>
         )}
       </div>
-      {validation.error && <p className="error" role="alert">Validation failed: {validation.error}</p>}
+      {(validation.connection === 'lost' || validation.connection === 'rescanned') && (
+        <p className="loc-warning">
+          {DISCONNECTED_HELP[validation.connection]} Until then, you can turn on Include unvalidated locators.
+        </p>
+      )}
+      {validation.error && validation.connection === 'connected' && <p className="error" role="alert">Validation failed: {validation.error}</p>}
       {form.scope === 'selected' && picked.size === 0 && (
         <p className="muted pom-hint">No elements selected. Tick elements in the list, or switch to All eligible.</p>
       )}
 
       <div className="pom-editor">
         <div className="pom-editor-bar">
-          <code>{pom.fileName}</code>
-          {form.edited && <span className="badge">Edited</span>}
+          <div className="file-tabs" role="tablist" aria-label="Generated files">
+            {(['pom', 'data'] as const).map((k) => {
+              const f = files[k]
+              return f ? (
+                <button key={k} type="button" role="tab" aria-selected={fileKind === k} className="file-tab" onClick={() => set({ file: k })}>
+                  {f.fileName}
+                  {form.edited[k] && <span className="badge">Edited</span>}
+                </button>
+              ) : null
+            })}
+            {!testData && <span className="muted file-none">No test data: nothing to fill in this Page Object</span>}
+          </div>
           <span className="spacer" />
-          {form.edited && (
-            <button type="button" className="link-btn" onClick={() => set({ edited: null })}>
+          {edited && (
+            <button type="button" className="link-btn" onClick={() => setEdited(undefined)}>
               Discard edits
             </button>
           )}
@@ -221,7 +256,7 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
         {outdated && (
           <p className="pom-outdated">
             Options or validation changed since you edited the code.{' '}
-            <button type="button" className="link-btn" onClick={() => set({ edited: null })}>
+            <button type="button" className="link-btn" onClick={() => setEdited(undefined)}>
               Replace with regenerated code
             </button>
           </p>
@@ -230,11 +265,11 @@ export function PomPanel({ scan, locators, validation, picked, form, onFormChang
         <textarea
           className="pom-code"
           value={code}
-          onChange={(e) => set({ edited: { code: e.target.value, base: form.edited?.base ?? pom.code } })}
+          onChange={(e) => setEdited({ code: e.target.value, base: edited?.base ?? active.generated })}
           onKeyDown={insertSpacesOnTab}
           spellCheck={false}
           wrap="off"
-          aria-label="Generated Page Object code (editable)"
+          aria-label={`${active.fileName} (editable)`}
         />
       </div>
 

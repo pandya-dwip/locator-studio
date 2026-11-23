@@ -232,6 +232,8 @@ export type ContentRequest =
   | { type: 'SCAN_PAGE' }
   | { type: 'HIGHLIGHT_ELEMENT'; scanId: string; elementId: string }
   | { type: 'VALIDATE_LOCATORS'; scanId: string; items: ValidationRequestItem[] }
+  /** Is the content script from this scan still running in the tab? */
+  | { type: 'PING'; scanId: string }
 
 // ---------------------------------------------------------------------------
 // Locator Validator: results of evaluating candidates against the live page.

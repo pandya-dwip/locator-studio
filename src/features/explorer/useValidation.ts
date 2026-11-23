@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { validateLocators } from '../../shared/messaging'
+import { checkPageConnection, validateLocators, type PageConnection } from '../../shared/messaging'
 import type { ElementLocatorResult, GeneratedLocator, LocatorValidationResult, ScanResult, ValidationRequestItem } from '../../shared/types'
 import { errorMessage } from '../../shared/utils'
 
@@ -13,6 +13,8 @@ export interface ValidationState {
   validatedElements: number
   running: { done: number; total: number } | null
   error: string | null
+  /** null while checking. Anything but 'connected' means validation cannot work until the page is scanned again. */
+  connection: PageConnection | null
   /** Validates every candidate of the given elements against the live page. */
   validateElements(elementIds: string[]): Promise<void>
   validateLocator(elementId: string, locator: GeneratedLocator): Promise<void>
@@ -26,7 +28,22 @@ export function useValidation(scan: ScanResult | null | undefined, locators: Map
   const [results, setResults] = useState<Map<string, LocatorValidationResult>>(new Map())
   const [running, setRunning] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [connection, setConnection] = useState<PageConnection | null>(null)
   const runId = useRef(0)
+
+  useEffect(() => {
+    setConnection(null)
+    if (!scan) return
+    if (scan.tabId === undefined) {
+      setConnection('lost')
+      return
+    }
+    let current = true
+    checkPageConnection(scan.tabId, scan.scanId).then((c) => current && setConnection(c))
+    return () => {
+      current = false
+    }
+  }, [scan])
 
   useEffect(() => {
     runId.current++ // cancels any in-flight run for the previous scan
@@ -49,6 +66,7 @@ export function useValidation(scan: ScanResult | null | undefined, locators: Map
         for (let i = 0; i < items.length; i += CHUNK) {
           const batch = await validateLocators(scan.tabId, scan.scanId, items.slice(i, i + CHUNK))
           if (runId.current !== id) return
+          setConnection('connected')
           setResults((prev) => {
             const next = new Map(prev)
             for (const r of batch) next.set(r.locatorId, r)
@@ -57,7 +75,11 @@ export function useValidation(scan: ScanResult | null | undefined, locators: Map
           setRunning({ done: Math.min(i + CHUNK, items.length), total: items.length })
         }
       } catch (err) {
-        if (runId.current === id) setError(errorMessage(err))
+        if (runId.current === id) {
+          setError(errorMessage(err))
+          // Distinguish "page unreachable" from other failures for the UI.
+          if (scan.tabId !== undefined) setConnection(await checkPageConnection(scan.tabId, scan.scanId))
+        }
       } finally {
         if (runId.current === id) setRunning(null)
       }
@@ -90,5 +112,11 @@ export function useValidation(scan: ScanResult | null | undefined, locators: Map
 
   const validatedElements = new Set([...results.values()].map((r) => r.elementId)).size
 
-  return { resultFor, validatedElements, running, error, validateElements, validateLocator }
+  return { resultFor, validatedElements, running, error, connection, validateElements, validateLocator }
 }
+
+/** Shown when the scan can no longer be validated against its page. */
+export const DISCONNECTED_HELP = {
+  lost: 'The scanned page reloaded or navigated, the tab was closed, or the extension was reloaded after this scan. Validation needs the page exactly as it was scanned: go back to that tab, click the Locator Studio toolbar icon and press Scan page.',
+  rescanned: 'This tab has been scanned again since. Reopen the workspace to load the latest scan.',
+} as const

@@ -55,6 +55,21 @@ export async function getActiveTab(): Promise<PageInfo | null> {
 
 export const startScan = (tabId: number) => sendToBackground({ type: 'START_SCAN', tabId })
 
+export type PageConnection = 'connected' | 'lost' | 'rescanned'
+
+/**
+ * Whether the scanned tab still runs the content script from this scan. Validation
+ * and highlighting need it: it holds the live element references.
+ */
+export async function checkPageConnection(tabId: number, scanId: string): Promise<PageConnection> {
+  try {
+    const { sameScan } = await sendToContent<{ sameScan: boolean }>(tabId, { type: 'PING', scanId })
+    return sameScan ? 'connected' : 'rescanned'
+  } catch {
+    return 'lost' // tab closed, page reloaded/navigated, or extension reloaded
+  }
+}
+
 /** Validates locator candidates against the live DOM of the scanned tab (read-only). */
 export async function validateLocators(
   tabId: number,

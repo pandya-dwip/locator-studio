@@ -53,8 +53,10 @@ const listener = respondWith<ContentRequest>(async (message, sender) => {
       return scan()
     case 'HIGHLIGHT_ELEMENT':
       return highlight(message.scanId, message.elementId)
+    case 'PING':
+      return { sameScan: message.scanId === currentScanId }
     case 'VALIDATE_LOCATORS':
-      if (message.scanId !== currentScanId) throw new Error('This page has been rescanned or reloaded since. Scan it again.')
+      if (message.scanId !== currentScanId) throw new Error('This tab has been scanned again since. Reopen the workspace to use the latest scan.')
       // Live references stay here; only serializable results leave the page.
       return validateLocators(document, message.items, (id) => registry.get(id)?.deref())
     default:

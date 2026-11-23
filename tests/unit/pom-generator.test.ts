@@ -256,6 +256,27 @@ describe('methods', () => {
     expect(pom(ctx, noSubmit).methods).toEqual(['goto'])
   })
 
+  it('login() for fields outside a <form> when one clearly named action button exists', async () => {
+    const formless = `
+      <button aria-label="open menu">☰</button>
+      <div id="form">
+        <label for="u">Username</label><input id="u" name="username">
+        <label for="p">Password</label><input id="p" name="password" type="password">
+        <button id="submit">Submit</button>
+      </div>`
+    const ctx = prepare(formless)
+    const r = pom(ctx, ctx.scan.elements.filter(isPomEligible).map((e) => e.id))
+    expect(r.code).toContain('async login(username: string, password: string): Promise<void> {')
+    const { calls, instance } = await execute(r.code, 'LoginPage', 'typescript')
+    calls.length = 0
+    await (instance.login as (...a: unknown[]) => Promise<void>)('u1', 'p1')
+    expect(calls.at(-1)).toMatch(/Submit.*\.click\(\)$/) // not "open menu"
+
+    // Two candidate actions: ambiguous, so no method is guessed.
+    const two = prepare(`${formless}<button>Continue</button>`)
+    expect(pom(two, two.scan.elements.filter(isPomEligible).map((e) => e.id)).methods).toEqual(['goto'])
+  })
+
   it('search() for a single search field form', () => {
     const ctx = prepare('<form role="search"><input type="search" name="q" aria-label="Search"><button>Go</button></form>')
     const r = pom(ctx, ctx.scan.elements.filter(isPomEligible).map((e) => e.id))

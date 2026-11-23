@@ -481,7 +481,7 @@ describe('batch generation', () => {
     expect(edit.locators.find((l) => l.strategy === 'role')!.sharedWith).toBe(699)
     expect(edit.locators.find((l) => l.isRecommended)?.expression).toMatch(/#edit-\d+/)
     expect(ms).toBeLessThan(5000)
-  })
+  }, 20_000) // jsdom scanning of ~4,000 elements is slow when suites run in parallel
 })
 
 describe('scope', () => {

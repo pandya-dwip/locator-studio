@@ -59,11 +59,16 @@ export interface PomResult {
   properties: PomProperty[]
   excluded: PomExclusion[]
   methods: string[]
+  /** Method signatures, with the element each parameter fills (used for test data). */
+  methodDetails: PomMethodInfo[]
 }
 
-interface Method {
+export interface PomMethodInfo {
   name: string
-  params: { name: string; type: 'string' | 'boolean' }[]
+  params: { name: string; type: 'string' | 'boolean'; elementId?: string }[]
+}
+
+interface Method extends PomMethodInfo {
   body: string[]
 }
 
@@ -111,18 +116,27 @@ export function generatePom(input: PomInput): PomResult {
   const methods = options.includeMethods ? buildMethods(properties, byId, scan, nameFor) : []
   const code = render(className, properties, methods, scan, options, input.generatedAt ?? new Date())
   const extension = options.language === 'typescript' ? 'ts' : 'js'
-  return { className, fileName: `${className}.${extension}`, code, properties, excluded, methods: methods.map((m) => m.name) }
+  return {
+    className,
+    fileName: `${className}.${extension}`,
+    code,
+    properties,
+    excluded,
+    methods: methods.map((m) => m.name),
+    methodDetails: methods.map(({ name, params }) => ({ name, params })),
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Methods: only workflows the scanned page structure supports.
 // ---------------------------------------------------------------------------
 
-type FieldAction = 'fill' | 'selectOption' | 'setChecked'
+export type FieldAction = 'fill' | 'selectOption' | 'setChecked'
 
 const TEXT_INPUT_TYPES = new Set(['text', 'email', 'password', 'search', 'tel', 'url', 'number', 'date', 'datetime-local', 'month', 'time', 'week'])
 
-function fieldAction(el: ScannedElement): FieldAction | undefined {
+/** How a Page Object fills this element, or undefined when it is not fillable. */
+export function fieldAction(el: ScannedElement): FieldAction | undefined {
   if (el.tagName === 'select') return 'selectOption'
   if (el.role === 'checkbox' || el.role === 'switch') return 'setChecked'
   if (el.tagName === 'textarea') return 'fill'
@@ -135,6 +149,15 @@ function isSubmit(el: ScannedElement): boolean {
   const type = el.attributes.type?.toLowerCase()
   if (el.tagName === 'button') return !type || type === 'submit'
   return el.tagName === 'input' && (type === 'submit' || type === 'image')
+}
+
+const ACTION_WORDS = /\b(submit|log ?in|sign ?in|sign ?up|register|continue|next|send|search|go|save|apply|create|confirm)\b/i
+
+/** A button outside a <form> that clearly submits something (not "open menu", "close"). */
+function isNamedAction(el: ScannedElement): boolean {
+  if (elementKind(el) !== 'button') return false
+  const name = el.accessibleName ?? el.textContent ?? el.attributes.value ?? ''
+  return ACTION_WORDS.test(name) || el.attributes.type?.toLowerCase() === 'submit'
 }
 
 function formOf(el: ScannedElement, byId: Map<string, ScannedElement>): ScannedElement | undefined {
@@ -171,10 +194,12 @@ function buildMethods(
   }
 
   // One method per <form> with fillable fields and exactly one submit button.
-  const groups = new Map<ScannedElement, PomProperty[]>()
+  // Fields outside any <form> (common: <div id="form">) form one page-level group,
+  // whose submit must be the only clearly named action button ("Submit", "Log in").
+  const groups = new Map<ScannedElement | null, PomProperty[]>()
   for (const p of properties) {
-    const form = formOf(byId.get(p.elementId)!, byId)
-    if (form) groups.set(form, [...(groups.get(form) ?? []), p])
+    const form = formOf(byId.get(p.elementId)!, byId) ?? null
+    groups.set(form, [...(groups.get(form) ?? []), p])
   }
   for (const [form, props] of groups) {
     const fields = props.flatMap((p) => {
@@ -182,7 +207,10 @@ function buildMethods(
       const action = fieldAction(el)
       return action ? [{ p, el, action }] : []
     })
-    const submits = props.filter((p) => isSubmit(byId.get(p.elementId)!))
+    const submits = props.filter((p) => {
+      const el = byId.get(p.elementId)!
+      return form ? isSubmit(el) : isNamedAction(el)
+    })
     if (fields.length === 0 || submits.length !== 1) continue
 
     const isSearch = (el: ScannedElement) =>
@@ -191,7 +219,7 @@ function buildMethods(
     if (fields.some((f) => f.el.properties.inputType === 'password')) base = 'login'
     else if (fields.length === 1 && isSearch(fields[0]!.el)) base = 'search'
     else {
-      const formWords = words(form.accessibleName ?? form.attributes.id ?? form.attributes.name ?? '').filter((w) => !/^form$/i.test(w))
+      const formWords = words(form?.accessibleName ?? form?.attributes.id ?? form?.attributes.name ?? '').filter((w) => !/^form$/i.test(w))
       base = camelCase(['submit', ...formWords.slice(0, 3), 'form'])
     }
 
@@ -200,7 +228,7 @@ function buildMethods(
     const body: string[] = []
     for (const { p, action } of fields) {
       const param = base === 'search' && fields.length === 1 ? paramFor('query') : paramName(p.name, paramFor)
-      params.push({ name: param, type: action === 'setChecked' ? 'boolean' : 'string' })
+      params.push({ name: param, type: action === 'setChecked' ? 'boolean' : 'string', elementId: p.elementId })
       body.push(`await this.${p.name}.${action}(${param});`)
     }
     body.push(`await this.${submits[0]!.name}.click();`)
