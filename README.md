@@ -2,7 +2,7 @@
 
 A Chrome extension for QA engineers who write Playwright tests. Locator Studio scans the current page on demand, extracts the relevant elements, suggests Playwright locator strategies, checks that they are unique and robust, and generates Page Object Model code in TypeScript or JavaScript.
 
-> **Status: M3, Locator Engine.** Scanning extracts real elements from the active page. Selecting one in the workspace **Elements** view shows ranked Playwright locator candidates with stability explanations and a preliminary recommendation. Validating candidates against the live page (M4) and the POM generator come next.
+> **Status: M5, POM Generator.** Scan a page, inspect elements and their Playwright locator candidates, validate the candidates against the live page, and generate a TypeScript or JavaScript Page Object from the locators that validated, then edit, copy or download it.
 
 Everything runs locally. There is no backend, no account, no telemetry and no network calls. Data is kept in `chrome.storage.local`.
 
@@ -65,7 +65,7 @@ Runs `tsc --noEmit` (strict), the unit tests, the production build, then the bui
 | `npm run dev` | Vite dev server + CRXJS dev build in `dist/` |
 | `npm run build` | Production build in `dist/` |
 | `npm run typecheck` | TypeScript check, no output files |
-| `npm run test` | Scanner, locator engine, escaping and explorer unit tests (Vitest, jsdom) |
+| `npm run test` | Scanner, engine, escaping, validator, POM generator and explorer tests (Vitest, jsdom) |
 | `npm run test:watch` | Tests in watch mode |
 | `npm run check` | `typecheck`, `test`, then `build` |
 
@@ -77,7 +77,8 @@ Runs `tsc --noEmit` (strict), the unit tests, the production build, then the bui
 4. Click **Load unpacked** and select the project's `dist` folder.
 5. Pin Locator Studio from the puzzle-piece menu in the toolbar.
 6. Open any `http(s)` page, click the Locator Studio icon and press **Scan page**.
-7. Click **Open workspace** and go to **Elements**. Select an element to see its **Locators**, copy one, or press **Highlight on page**.
+7. Click **Open workspace**. In **Elements**, select an element to see its validated **Locators**, or press **Highlight on page**.
+8. Open **POM Generator**, press **Validate**, then copy or download the Page Object.
 
 After a production rebuild, click the reload icon on the extension's card in `chrome://extensions`.
 
@@ -289,7 +290,9 @@ A candidate is recommended only if it is `stable` or `moderate` **and** was not 
 
 ### Why generation and validation are separate
 
-A locator's real match count depends on the **live page**: elements the scanner didn't extract, Playwright's substring matching, hidden elements, and the page changing after the scan. The engine only sees scanned metadata, so it never reports a match count or claims uniqueness. `GeneratedLocator.validation` stays `undefined`, and the UI shows "Not validated yet". The one exception is negative evidence: two scanned elements receiving the identical expression proves the locator is *not* unique (`sharedWith`). The Locator Validator (M4) will run candidates against the page and fill in `validation`.
+A locator's real match count depends on the **live page**: elements the scanner didn't extract, Playwright's substring matching, hidden elements, and the page changing after the scan. The engine only sees scanned metadata, so it never reports a match count or claims uniqueness. The one exception is negative evidence: two scanned elements receiving the identical expression proves the locator is *not* unique (`sharedWith`). Live checks are the Locator Validator's job (below). Its results are kept separately from the generated locators.
+
+Each candidate also carries a data-only `query` (for example `{ kind: 'role', role: 'button', name: 'Log in' }`) that mirrors its expression. The validator evaluates the query; the expression string is never executed.
 
 ### Workspace
 
@@ -327,6 +330,125 @@ Separately, the built scanner and engine were run on a 4,200-element fixture in 
 - Stability is heuristic. Generated-value detection can miss unusual schemes or flag unusual hand-written names.
 - Locators are regenerated on every workspace load and not stored.
 
+## Locator Validator (M4)
+
+`src/core/validator/` checks locator candidates against the **live DOM** of the scanned tab. It runs inside the content script, using the same weak element registry as highlighting. Only serializable results reach the workspace, and the page is never clicked, typed into, scrolled or changed.
+
+| File | Responsibility |
+| --- | --- |
+| `matcher.ts` | Browser-side equivalents of Playwright locators, evaluated from the data-only `query` |
+| `validator.ts` | Match count, uniqueness, visibility, enabled state, comparison with the scanned element, and status |
+
+### What each result answers
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `valid` (exactly one match, and it is the scanned element), `multiple`, `not-found`, `mismatch` (one match, but a different element), `invalid` (selector syntax error), `stale` (the scanned element is gone), `error`, or `unsupported` |
+| `matchCount`, `isUnique` | How many elements the locator matches right now |
+| `matchesOriginalElement` | Whether the scanned element is among the matches. A unique locator can still be the wrong one. |
+| `isVisible`, `isEnabled` | State of the element an action would hit. Left undefined when not applicable. |
+| `approximate` | `true` when the browser-side check approximates Playwright (see below). Shown in the UI as "approximate check". |
+
+### Accuracy
+
+| Strategy | How it is checked | Same as Playwright? |
+| --- | --- | --- |
+| CSS, test id | `querySelectorAll` on the document **and every open shadow root** (Playwright's CSS pierces shadow DOM) | Yes, except that combinators such as `#a b` don't cross shadow boundaries |
+| XPath | `document.evaluate`. It doesn't enter shadow DOM, and neither does Playwright. | Yes |
+| Placeholder, alt text, title | The attribute, with whitespace-normalised, case-insensitive substring matching (exact equality when `exact` is set) | Yes |
+| Role | Explicit role or the scanner's implicit-role table, plus the scanner's accessible-name approximation. Excludes elements hidden from the accessibility tree (`display:none`, `visibility:hidden`, `aria-hidden`), as Playwright does. Heading `level` is checked. | **Approximate**: the accessible-name algorithm is simplified |
+| Label | `aria-label`, `aria-labelledby` text, and associated `<label>` text | **Approximate** |
+| Text | Innermost elements whose normalised text contains the string; button-type inputs match by value | **Approximate** |
+
+Approximate results carry a warning to confirm them in a Playwright run. They are never presented as exact Playwright results.
+
+### Original-element verification and page changes
+
+- The scanned element is looked up through the content script's registry. If it has been removed, re-rendered (replaced by a look-alike) or garbage-collected, the result is `stale`, even when the locator still finds something. The message reports how many elements it now matches.
+- Validation runs against the DOM **as it is now**, so revalidating after the page changes gives current answers. Nothing is rescanned automatically.
+- Results are tied to one scan and one expression. A new scan clears them, and a request carrying an old scan id is refused ("Scan it again").
+
+### Using it
+
+- Selecting an element validates its candidates automatically, the first time only.
+- **Revalidate** (per element), **Check/Recheck** (per locator) and **Validate all** (header) re-run validation on request.
+- Batches are sent in chunks of 300 with a progress counter. A failure on one candidate is reported for that candidate only.
+- Measured in headless Chrome: 91 candidates on a 27-element page validated in 4 ms.
+- Each candidate shows its status badge, match count, visibility, enabled state, whether it is the scanned element, the time of the check, and any warnings.
+- After validation, **★ Best validated** marks the candidate the Page Object will use. Before validation, the engine's preliminary **★ Recommended** is shown instead.
+
+## POM Generator (M5)
+
+`src/generators/playwright/` turns scanned elements, their candidates and their validation results into Playwright Page Object source code. It is pure TypeScript with no DOM and no React.
+
+| File | Responsibility |
+| --- | --- |
+| `pom-generator.ts` | Selects elements, renders TypeScript or JavaScript, and builds methods |
+| `select.ts` | Locator selection rules |
+| `naming.ts` | Property, parameter and class names |
+
+### Locator selection
+
+1. Use the **first candidate validated as `valid`** (unique, and the scanned element), in the engine's order: recommendation, then stability, then strategy preference. A validated candidate always wins over an unvalidated one.
+2. Never use candidates validated as `multiple`, `mismatch`, `not-found`, `invalid` or `stale`.
+3. If no candidate is valid, the element is **excluded**, with a reason ("Not validated yet", "Every checked candidate matches more than one element", "The scanned element is no longer on the page", …).
+4. With **Include unvalidated locators** on, an excluded element may use a candidate that was never validated (or whose check was unsupported or failed). The code marks it with `// Unvalidated locator: confirm it before relying on it.`
+5. Unstable but valid locators are used, with a `// Unstable: …` comment.
+
+The file header states how many locators were validated.
+
+### Output
+
+- **TypeScript:** `import type { Locator, Page } from '@playwright/test'`, `export class`, `readonly` typed fields, and typed method parameters. Saved as `.ts`.
+- **JavaScript:** CommonJS (`module.exports = { … }`, the default) or ES module (`export class`). Parameter types are given in JSDoc. Saved as `.js`.
+- **Elements:** **All eligible** (buttons, links, form fields and headings; not options, paragraphs or images) or **Selected** (ticked in the list, in any tab). Properties follow document order.
+- **Reusable methods** (optional), generated only when the scanned structure supports them:
+  - `goto()`: the scanned http(s) URL, without query string or fragment;
+  - one method per `<form>` with fillable fields and exactly one submit button. It is named `login()` when the form has a password field, `search(query)` for a single search field, and otherwise `submit…Form()`. It fills text fields, `selectOption`s selects, `setChecked`s checkboxes, then clicks submit.
+- **Naming:**
+  - **Source:** the accessible name first, then placeholder, id, `name`, test id and text, plus a type suffix, so you get `emailInput`, `logInButton`, `rememberMeCheckbox`, and `companyLogo` (the suffix isn't doubled).
+  - **Cleanup:** accents are folded to ASCII.
+  - **Validity:** reserved words get a suffix (`classElement`), and duplicates become `saveButton`, `saveButton2`.
+  - **Editing:** property names can be changed in **Included elements**.
+- **Class name:** the default comes from the page title (or the URL path), always PascalCase ending in `Page`. Any input is turned into a valid name.
+
+### Workspace
+
+**POM Generator** in the sidebar opens the generator in the explorer's main panel. The element list, tabs and selection stay on the left. The panel has:
+- language, module format, class name, scope, methods and unvalidated-locator options;
+- an included/excluded summary with a **Validate** button for the elements in scope;
+- a full-width, full-height **editable** code area (monospace, horizontal and vertical scrolling, Tab inserts two spaces);
+- **Copy**, and **Download** as `<ClassName>.ts` or `.js`. The download is a local file created from the code area's current contents, with no permission or network request needed.
+
+If options or validation change after you edit the code, your edits are kept and a banner offers **Replace with regenerated code**. Switching language regenerates the code and keeps the other options.
+
+### Tests
+
+- `tests/unit/validator.test.ts` (jsdom) covers:
+  - unique, duplicate, missing and invalid CSS; XPath;
+  - role, label, placeholder, title, test-id and text locators;
+  - hidden and disabled matches;
+  - wrong-element and descendant matches;
+  - removed and replaced elements, and DOM changes after the scan;
+  - unknown snapshots, shadow DOM, batch isolation, and every engine candidate on a realistic page;
+  - that approximate strategies are never reported as exact.
+- `tests/unit/pom-generator.test.ts` runs the real scanner, engine and validator, then **executes** the generated code against a recording fake `page`. TypeScript is stripped and syntax-checked with Vite's oxc transform. It covers:
+  - TypeScript, CommonJS and ESM output;
+  - selected and all-eligible scope, and empty selection;
+  - duplicate names, reserved words and class-name cleanup;
+  - choosing a validated alternative over a recommended locator that validation shows to match several elements;
+  - exclusion and the unvalidated opt-in;
+  - never using stale, mismatch or multiple results;
+  - methods on and off, and `login`/`search`/`goto` behaviour.
+
+### Known limitations (M4/M5)
+
+- Role, label and text validation are approximations, so confirm critical locators in a Playwright run. The validator never uses Playwright itself.
+- Elements in closed shadow roots or iframes can't be validated, because they were never scanned.
+- Validation needs the scanned tab still open and unchanged. After a reload, scan again.
+- Methods are limited to `goto()` and form submission. There are no assertions or custom workflows.
+- The code area has no syntax highlighting (no editor dependency was added).
+
 ## Project structure
 
 ```
@@ -341,10 +463,10 @@ locator-studio/
 │   ├── core/
 │   │   ├── scanner/         DOM Scanner v1: traversal, classification, visibility, text
 │   │   ├── locator-engine/  Locator Engine: strategies, escaping, stability, recommendation
-│   │   └── validator/       Uniqueness and quality checks (next milestone)
-│   ├── features/            Workspace pages: explorer (Elements + Locators), pom-generator,
+│   │   └── validator/       Locator Validator: live-DOM matching and verification
+│   ├── features/            Workspace pages: explorer (Elements, Locators, validation), pom-generator (panel),
 │   │                        settings, export
-│   ├── generators/playwright/  POM code generation, TS + JS (next milestone)
+│   ├── generators/playwright/  POM Generator: selection, naming, TS/JS rendering
 │   ├── shared/
 │   │   ├── types/           Message, scan and settings types
 │   │   ├── constants/       Storage keys and defaults
@@ -355,7 +477,7 @@ locator-studio/
 │   │   └── mount.tsx        Common page bootstrap
 │   ├── storage/             chrome.storage.local wrapper
 │   └── styles/              Design tokens and base styles (light and dark)
-├── tests/unit/            Vitest tests (scanner, locator engine, escaping, explorer search)
+├── tests/unit/            Vitest tests (scanner, engine, escaping, validator, POM generator, explorer)
 ├── tests/integration/     (reserved)
 ├── index.html               Popup page
 ├── workspace.html           Workspace page

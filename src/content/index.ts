@@ -1,7 +1,8 @@
 // Content script: injected on demand into the active tab by the background worker.
-// Runs the DOM scanner, keeps the live element registry (never serialized), and
-// draws highlights for elements selected in the workspace.
+// Runs the DOM scanner, keeps the live element registry (never serialized),
+// validates locator candidates against the live DOM, and draws highlights.
 import { scanDocument } from '../core/scanner'
+import { validateLocators } from '../core/validator'
 import { respondWith } from '../shared/messaging'
 import type { ContentRequest, ScanResult } from '../shared/types'
 import { createHighlighter } from './highlight'
@@ -52,6 +53,10 @@ const listener = respondWith<ContentRequest>(async (message, sender) => {
       return scan()
     case 'HIGHLIGHT_ELEMENT':
       return highlight(message.scanId, message.elementId)
+    case 'VALIDATE_LOCATORS':
+      if (message.scanId !== currentScanId) throw new Error('This page has been rescanned or reloaded since. Scan it again.')
+      // Live references stay here; only serializable results leave the page.
+      return validateLocators(document, message.items, (id) => registry.get(id)?.deref())
     default:
       throw new Error(`Unknown message: ${JSON.stringify(message)}`)
   }

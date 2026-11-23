@@ -3,7 +3,9 @@ import type {
   BackgroundResponseMap,
   ContentRequest,
   MessageResponse,
+  LocatorValidationResult,
   PageInfo,
+  ValidationRequestItem,
 } from '../types'
 import { errorMessage, friendlyTabError } from '../utils'
 
@@ -52,6 +54,19 @@ export async function getActiveTab(): Promise<PageInfo | null> {
 }
 
 export const startScan = (tabId: number) => sendToBackground({ type: 'START_SCAN', tabId })
+
+/** Validates locator candidates against the live DOM of the scanned tab (read-only). */
+export async function validateLocators(
+  tabId: number,
+  scanId: string,
+  items: ValidationRequestItem[],
+): Promise<LocatorValidationResult[]> {
+  try {
+    return await sendToContent<LocatorValidationResult[]>(tabId, { type: 'VALIDATE_LOCATORS', scanId, items })
+  } catch (err) {
+    throw new Error(friendlyTabError(err))
+  }
+}
 
 /**
  * Brings the scanned tab to the front and highlights one element in it.

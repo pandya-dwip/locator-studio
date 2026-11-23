@@ -51,6 +51,7 @@ function selectorCandidate(
   return {
     key, strategy, rank,
     expression: pageCall('locator', selector),
+    query: { kind: strategy, selector },
     displayValue: selector,
     stability: a.level, stabilityReasons: a.reasons, sourceAttributes, notes: [],
   }

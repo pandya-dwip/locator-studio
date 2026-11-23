@@ -64,6 +64,18 @@ function evaluate(expression: string): Call {
 }
 
 const ALLOWED_OPTIONS: Record<string, string> = { name: 'string', level: 'number', exact: 'boolean' }
+
+/** The page call a query corresponds to, for cross-checking against the expression. */
+function queryArgs(q: GeneratedLocator['query']): Call {
+  const method = { role: 'getByRole', label: 'getByLabel', placeholder: 'getByPlaceholder', text: 'getByText', alttext: 'getByAltText', title: 'getByTitle', testid: 'getByTestId', css: 'locator', xpath: 'locator' }[q.kind]
+  if (q.kind === 'role') {
+    const opts = Object.fromEntries(Object.entries({ name: q.name, level: q.level, exact: q.exact }).filter(([, v]) => v !== undefined))
+    return { method, args: Object.keys(opts).length ? [q.role, opts] : [q.role] }
+  }
+  if (q.kind === 'testid') return { method, args: [q.value] }
+  if ('selector' in q) return { method, args: [q.selector] }
+  return { method, args: [q.text] }
+}
 const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim()
 
 function matchesSelector(selector: string, node: Element): boolean {
@@ -83,7 +95,8 @@ function checkInvariants(r: Run, testIdAttribute: string) {
     expect(res.locators.filter((l) => l.isRecommended).length).toBeLessThanOrEqual(1)
 
     for (const l of res.locators) {
-      expect(l.validation, 'never fabricated').toBeUndefined()
+      expect('validation' in l, 'generation never reports validation').toBe(false)
+      expect(queryArgs(l.query), `query mirrors ${l.expression}`).toEqual(evaluate(l.expression))
       expect(l.stabilityReasons.length).toBeGreaterThan(0)
       expect(l.sourceAttributes.length).toBeGreaterThan(0)
 
@@ -476,6 +489,6 @@ describe('scope', () => {
     const r = run(LOGIN_PAGE)
     const all: GeneratedLocator[] = [...r.locators.values()].flatMap((x) => x.locators)
     expect(all.length).toBeGreaterThan(30)
-    expect(all.every((l) => l.validation === undefined)).toBe(true)
+    expect(all.every((l) => !('validation' in l))).toBe(true)
   })
 })

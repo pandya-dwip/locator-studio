@@ -1,21 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Crosshair, FileCode, ListTree, Settings, type LucideIcon } from 'lucide-react'
 import { ElementsPage } from '../features/explorer/ElementsPage'
-import { PomGeneratorPage } from '../features/pom-generator/PomGeneratorPage'
 import { SettingsPage } from '../features/settings/SettingsPage'
 
 interface Route {
   id: string
   label: string
   icon: LucideIcon
-  Page: () => React.ReactNode
-  /** Full-height page that manages its own layout and header (no page title bar). */
-  fullHeight?: boolean
+  /** Ordinary pages render inside the title-bar layout. */
+  Page?: () => React.ReactNode
+  /** Explorer views share one full-height ElementsPage (state survives switching between them). */
+  explorer?: 'elements' | 'pom'
 }
 
 const ROUTES: Route[] = [
-  { id: 'elements', label: 'Elements', icon: ListTree, Page: ElementsPage, fullHeight: true },
-  { id: 'pom', label: 'POM Generator', icon: FileCode, Page: PomGeneratorPage },
+  { id: 'elements', label: 'Elements', icon: ListTree, explorer: 'elements' },
+  { id: 'pom', label: 'POM Generator', icon: FileCode, explorer: 'pom' },
   { id: 'settings', label: 'Settings', icon: Settings, Page: SettingsPage },
 ]
 
@@ -55,18 +55,16 @@ export function Workspace() {
         <footer className="sidebar-footer">v{chrome.runtime.getManifest().version}</footer>
       </aside>
 
-      {route.fullHeight ? (
+      {route.explorer ? (
         <main className="content content-full">
-          <route.Page />
+          <ElementsPage view={route.explorer} />
         </main>
       ) : (
         <main className="content">
           <header className="content-header">
             <h2>{route.label}</h2>
           </header>
-          <div className="content-body">
-            <route.Page />
-          </div>
+          <div className="content-body">{route.Page && <route.Page />}</div>
         </main>
       )}
     </div>

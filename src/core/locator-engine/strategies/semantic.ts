@@ -77,6 +77,7 @@ export const testIdStrategy: Strategy = (el, ctx) => {
       out.push(candidate({
         key: `testid:${attr}`, strategy: 'testid', rank: 10,
         expression: pageCall('getByTestId', value),
+        query: { kind: 'testid', attribute: attr, value },
         displayValue: `testid "${value}"`,
         stability: level, stabilityReasons: reasons, sourceAttributes: [attr],
       }))
@@ -85,6 +86,7 @@ export const testIdStrategy: Strategy = (el, ctx) => {
       out.push(candidate({
         key: `testid:${attr}`, strategy: 'testid', rank: 11,
         expression: pageCall('locator', `[${attr}=${cssString(value)}]`),
+        query: { kind: 'css', selector: `[${attr}=${cssString(value)}]` },
         displayValue: `[${attr}="${value}"]`,
         stability: level, stabilityReasons: reasons, sourceAttributes: [attr],
         notes: [
@@ -112,6 +114,7 @@ export const roleStrategy: Strategy = (el) => {
     return [candidate({
       key: 'role', strategy: 'role', rank: 75,
       expression: pageCall('getByRole', role),
+      query: { kind: 'role', role },
       displayValue: `role=${role}`,
       stability: 'moderate',
       stabilityReasons: ['Landmark role without an accessible name: survives content changes, but adding another such landmark changes what it matches'],
@@ -132,6 +135,7 @@ export const roleStrategy: Strategy = (el) => {
   return [candidate({
     key: 'role', strategy: 'role', rank: 20,
     expression: pageCall('getByRole', role, { name, level: headingLvl }),
+    query: { kind: 'role', role, name, level: headingLvl },
     displayValue: `${role} "${name}"${headingLvl ? ` (level ${headingLvl})` : ''}`,
     stability: level, stabilityReasons: reasons,
     sourceAttributes: [roleSource, source ? NAME_SOURCE_LABEL[source] : 'accessible name'],
@@ -155,6 +159,7 @@ export const labelStrategy: Strategy = (el) => {
   return [candidate({
     key: 'label', strategy: 'label', rank: 30,
     expression: pageCall('getByLabel', name),
+    query: { kind: 'label', text: name },
     displayValue: `label "${name}"`,
     stability: level, stabilityReasons: reasons, sourceAttributes: [NAME_SOURCE_LABEL[source]],
   })]
@@ -167,6 +172,7 @@ export const placeholderStrategy: Strategy = (el) => {
   return [candidate({
     key: 'placeholder', strategy: 'placeholder', rank: 40,
     expression: pageCall('getByPlaceholder', value),
+    query: { kind: 'placeholder', text: value },
     displayValue: `placeholder "${value}"`,
     stability: level, stabilityReasons: reasons, sourceAttributes: ['placeholder'],
   })]
@@ -183,6 +189,7 @@ export const altTextStrategy: Strategy = (el) => {
   return [candidate({
     key: 'alttext', strategy: 'alttext', rank: 50,
     expression: pageCall('getByAltText', value),
+    query: { kind: 'alttext', text: value },
     displayValue: `alt "${value}"`,
     stability: level, stabilityReasons: reasons, sourceAttributes: ['alt'],
   })]
@@ -195,6 +202,7 @@ export const titleStrategy: Strategy = (el) => {
   return [candidate({
     key: 'title', strategy: 'title', rank: 60,
     expression: pageCall('getByTitle', value),
+    query: { kind: 'title', text: value },
     displayValue: `title "${value}"`,
     stability: level, stabilityReasons: reasons, sourceAttributes: ['title'],
   })]
@@ -212,6 +220,7 @@ export const textStrategy: Strategy = (el) => {
   return [candidate({
     key: 'text', strategy: 'text', rank: 80,
     expression: pageCall('getByText', text),
+    query: { kind: 'text', text },
     displayValue: `text "${text}"`,
     stability: level, stabilityReasons: reasons, sourceAttributes: ['text content'],
   })]

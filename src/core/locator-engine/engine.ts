@@ -80,6 +80,7 @@ function finalize(drafts: Draft[]): Map<string, ElementLocatorResult> {
       id: `${d.elementId}:${c.key}`,
       strategy: c.strategy,
       expression: c.expression,
+      query: c.query,
       displayValue: c.displayValue,
       stability: c.stability,
       stabilityReasons: c.stabilityReasons,

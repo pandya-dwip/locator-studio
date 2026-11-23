@@ -1,5 +1,5 @@
 // Internal engine types. Public result types live in src/shared/types.
-import type { LocatorStrategy, ScannedElement, StabilityLevel } from '../../shared/types'
+import type { LocatorQuery, LocatorStrategy, ScannedElement, StabilityLevel } from '../../shared/types'
 
 export interface LocatorEngineOptions {
   /** The attribute Playwright's getByTestId() reads (its `testIdAttribute` setting). */
@@ -22,6 +22,8 @@ export interface Candidate {
   /** Preference order within the same stability level (lower is preferred). */
   rank: number
   expression: string
+  /** Data-only equivalent of `expression`, evaluated by the validator. */
+  query: LocatorQuery
   displayValue: string
   stability: StabilityLevel
   stabilityReasons: string[]

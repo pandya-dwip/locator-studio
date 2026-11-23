@@ -116,12 +116,15 @@ export type LocatorStrategy =
 /** Expected resilience to page changes. Says nothing about uniqueness. */
 export type StabilityLevel = 'stable' | 'moderate' | 'unstable' | 'unknown'
 
-export interface LocatorValidation {
-  matchCount: number
-  isUnique: boolean
-  isVisible: boolean
-  isValid: boolean
-}
+/**
+ * Structured, data-only form of a locator. The content script evaluates this
+ * against the live DOM; the expression string is never executed.
+ */
+export type LocatorQuery =
+  | { kind: 'role'; role: string; name?: string; exact?: boolean; level?: number }
+  | { kind: 'label' | 'placeholder' | 'text' | 'alttext' | 'title'; text: string; exact?: boolean }
+  | { kind: 'testid'; attribute: string; value: string }
+  | { kind: 'css' | 'xpath'; selector: string }
 
 export interface GeneratedLocator {
   /** `<elementId>:<variant>`, stable for a given scan and settings. */
@@ -143,8 +146,8 @@ export interface GeneratedLocator {
    * generated. > 0 proves the locator is not unique; 0 proves nothing.
    */
   sharedWith: number
-  /** Set by the Locator Validator. Undefined means not validated. */
-  validation?: LocatorValidation
+  /** What the validator evaluates. Mirrors `expression`. */
+  query: LocatorQuery
 }
 
 export interface ElementLocatorResult {
@@ -228,5 +231,50 @@ export interface BackgroundResponseMap {
 export type ContentRequest =
   | { type: 'SCAN_PAGE' }
   | { type: 'HIGHLIGHT_ELEMENT'; scanId: string; elementId: string }
+  | { type: 'VALIDATE_LOCATORS'; scanId: string; items: ValidationRequestItem[] }
+
+// ---------------------------------------------------------------------------
+// Locator Validator: results of evaluating candidates against the live page.
+// ---------------------------------------------------------------------------
+
+export type ValidationStatus =
+  /** Exactly one match, and it is the scanned element. */
+  | 'valid'
+  | 'multiple'
+  | 'not-found'
+  /** Exactly one match, but not the scanned element. */
+  | 'mismatch'
+  /** Selector syntax error. */
+  | 'invalid'
+  /** The scanned element is gone (removed, replaced or the page changed). */
+  | 'stale'
+  | 'error'
+  | 'unsupported'
+
+export interface ValidationRequestItem {
+  locatorId: string
+  elementId: string
+  expression: string
+  query: LocatorQuery
+}
+
+export interface LocatorValidationResult {
+  locatorId: string
+  elementId: string
+  /** The expression that was validated (results never apply to a changed locator). */
+  expression: string
+  status: ValidationStatus
+  matchCount: number
+  isUnique: boolean
+  /** Of the single matched element (or the scanned element when it is among the matches). */
+  isVisible?: boolean
+  isEnabled?: boolean
+  matchesOriginalElement?: boolean
+  /** True for role/label/text matching, which approximates Playwright's algorithms. */
+  approximate: boolean
+  message: string
+  warnings: string[]
+  validatedAt: number
+}
 
 export type MessageResponse<T> = { ok: true; data: T } | { ok: false; error: string }

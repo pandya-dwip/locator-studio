@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Crosshair, LoaderCircle, MousePointerClick } from 'lucide-react'
+import { Crosshair, LoaderCircle, MousePointerClick, RefreshCw } from 'lucide-react'
 import { CATEGORIES, NAME_SOURCE_LABEL } from '../../shared/constants'
 import { highlightElement } from '../../shared/messaging'
 import type { ScannedElement, ScanResult } from '../../shared/types'
@@ -8,6 +8,7 @@ import { errorMessage } from '../../shared/utils'
 import { ENABLED_LABEL, REASON_LABEL, VISIBILITY_LABEL, identifier } from './format'
 import { LocatorPanel } from './LocatorPanel'
 import type { LocatorState } from './useLocators'
+import type { ValidationState } from './useValidation'
 
 const categoryLabel = (id: string) => CATEGORIES.find((c) => c.id === id)?.label ?? id
 
@@ -15,11 +16,15 @@ interface Props {
   element: ScannedElement | undefined
   result: ScanResult
   locators: LocatorState
+  validation: ValidationState
+  /** Ticked for the Page Object. */
+  picked: boolean
+  onTogglePicked: (id: string) => void
   onSelect: (id: string) => void
 }
 
 /** Main panel: the selected element, its locators, and (collapsed) its raw metadata. */
-export function ElementDetails({ element: el, result, locators, onSelect }: Props) {
+export function ElementDetails({ element: el, result, locators, validation, picked, onTogglePicked, onSelect }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [el?.id])
@@ -66,16 +71,38 @@ export function ElementDetails({ element: el, result, locators, onSelect }: Prop
             {el.enabledState !== 'not-applicable' && ` · ${ENABLED_LABEL[el.enabledState]}`}
           </p>
         </div>
-        <button className="btn" onClick={handleHighlight} disabled={busy || result.tabId === undefined}>
-          {busy ? <LoaderCircle size={14} className="spin" /> : <Crosshair size={14} />}
-          Highlight on page
-        </button>
+        <div className="detail-actions">
+          <label className="check">
+            <input type="checkbox" checked={picked} onChange={() => onTogglePicked(el.id)} />
+            In Page Object
+          </label>
+          <button className="btn" onClick={handleHighlight} disabled={busy || result.tabId === undefined}>
+            {busy ? <LoaderCircle size={14} className="spin" /> : <Crosshair size={14} />}
+            Highlight on page
+          </button>
+        </div>
       </header>
       {error && <p className="error" role="alert">{error}</p>}
 
       <section className="detail-section">
-        <h3>Locators</h3>
-        <LocatorPanel result={locators.results?.get(el.id)} pending={locators.pending} error={locators.error} />
+        <div className="section-head">
+          <h3>Locators</h3>
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => void validation.validateElements([el.id])}
+            disabled={!!validation.running || !locators.results}
+          >
+            <RefreshCw size={12} /> Revalidate
+          </button>
+        </div>
+        <LocatorPanel
+          elementId={el.id}
+          result={locators.results?.get(el.id)}
+          pending={locators.pending}
+          error={locators.error}
+          validation={validation}
+        />
       </section>
 
       <details className="detail-section detail-more">
